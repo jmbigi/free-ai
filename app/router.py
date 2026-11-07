@@ -43,6 +43,9 @@ AUTO_CANDIDATES = [
     ("pollinations", "openai-fast", "Pollinations anónimo"),
     ("pollinations", "openai", "Pollinations anónimo"),
     ("openrouter", "openrouter/free", "OpenRouter router free"),
+    ("openrouter", "meta-llama/llama-3.3-70b-instruct:free", "OpenRouter :free"),
+    ("openrouter", "google/gemma-4-31b-it:free", "OpenRouter :free"),
+    ("openrouter", "qwen/qwen3-coder:free", "OpenRouter :free"),
     ("groq", "llama-3.3-70b-versatile", "Groq"),
     ("nvidia", "meta/llama-3.3-70b-instruct", "NVIDIA NIM"),
     ("nvidia", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA NIM"),
@@ -55,9 +58,9 @@ AUTO_CANDIDATES = [
     ("deepseek", "deepseek-chat", "DeepSeek official"),
     ("moonshot", "kimi-k2-0711-preview", "Moonshot/Kimi"),
     ("opencode", "big-pickle", "OpenCode"),
-    ("openrouter", "meta-llama/llama-3.3-70b-instruct:free", "OpenRouter :free"),
-    ("openrouter", "qwen/qwen3-coder:free", "OpenRouter :free"),
     ("openrouter", "google/gemma-3-27b-it:free", "OpenRouter :free"),
+    ("openrouter", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", "OpenRouter :free"),
+    ("openrouter", "liquid/lfm-2.5-2.6b:free", "OpenRouter :free"),
 ]
 
 

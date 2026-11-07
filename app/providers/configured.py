@@ -28,9 +28,13 @@ class OpenRouterProvider(_S):
     def api_key(self): return settings.openrouter_api_key
     default_models = [
         ("openrouter/free", "openrouter/free", ["chat"], "Routes to available eligible free models; availability/rate limits vary."),
-        ("meta-llama/llama-3.3-70b-instruct:free", "meta-llama/llama-3.3-70b-instruct:free", ["chat"], "Free variant when available."),
+        ("meta-llama/llama-3.3-70b-instruct:free", "meta-llama/llama-3.3-70b-instruct:free", ["chat","tools"], "Free variant when available."),
         ("qwen/qwen3-coder:free", "qwen/qwen3-coder:free", ["chat","tools"], "Free variant when available."),
-        ("google/gemma-3-27b-it:free", "google/gemma-3-27b-it:free", ["chat"], "Free variant when available."),
+        ("google/gemma-3-27b-it:free", "google/gemma-3-27b-it:free", ["chat","tools"], "Free variant when available."),
+        ("google/gemma-4-31b-it:free", "google/gemma-4-31b-it:free", ["chat","tools"], "OpenRouter :free (verified in /models catalog when key configured)."),
+        ("google/gemma-4-26b-a4b-it:free", "google/gemma-4-26b-a4b-it:free", ["chat","tools"], "OpenRouter :free (availability/rate limits vary)."),
+        ("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", ["chat","reasoning"], "OpenRouter :free; limits vary."),
+        ("liquid/lfm-2.5-2.6b:free", "liquid/lfm-2.5-2.6b:free", ["chat"], "OpenRouter :free small model; limits vary."),
     ]
 
 class NvidiaProvider(_S):
