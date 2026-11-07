@@ -1,18 +1,24 @@
 import os, warnings
+from pathlib import Path
+from dotenv import dotenv_values
 warnings.filterwarnings('ignore', category=DeprecationWarning)
-os.environ.setdefault('FT_AI_API_KEY','test-gateway-key')
+_env = Path(__file__).resolve().parent / '.env'
+_vals = dotenv_values(_env) if _env.exists() else {}
+_key = (_vals.get('FT_AI_API_KEY') or _vals.get('API_KEY') or os.getenv('FT_AI_API_KEY') or os.getenv('API_KEY') or 'test-gateway-key')
+_key = str(_key).strip().strip('"\'')
+os.environ.setdefault('FT_AI_API_KEY', _key); os.environ.setdefault('API_KEY', _key)
 from fastapi.testclient import TestClient
 from app.main import app
 
 def ok(name, cond, detail=''):
     print(('PASS' if cond else 'FAIL') + f': {name}', detail)
-    if not cond:
-        raise SystemExit(1)
+    if not cond: raise SystemExit(1)
 
-AUTH = {'Authorization':'Bearer test-gateway-key'}
+AUTH = {'Authorization': f'Bearer {_key}'}
 c = TestClient(app)
 r = c.get('/health'); ok('health 200', r.status_code == 200); ok('health has version', 'version' in r.json())
 ok('readyz', c.get('/readyz').status_code == 200)
+ok('ping', c.get('/v1/ping').json().get('ok') is True)
 ok('help html', c.get('/help').status_code == 200)
 ok('help json', c.get('/help.json').status_code == 200)
 ok('models auth', c.get('/v1/models').status_code in (401, 403))

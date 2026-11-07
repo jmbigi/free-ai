@@ -256,6 +256,11 @@ async def help_ui(request: Request):
 async def help_json(request: Request):
     return help_payload("https://ia.forthtrade.com")
 
+
+@app.get("/ping")
+@app.get("/v1/ping")
+async def ping():
+    return {"ok": True, "service": "free-ai-gateway", "version": app.version, "ts": int(time.time())}
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return INDEX_HTML
