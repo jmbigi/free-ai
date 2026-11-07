@@ -1,0 +1,22 @@
+# Template for post-certbot HTTPS vhost (certbot may generate similar file).
+<VirtualHost *:443>
+    ServerName ia.forthtrade.com
+
+    SSLEngine on
+    SSLCertificateFile /etc/letsencrypt/live/ia.forthtrade.com/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/ia.forthtrade.com/privkey.pem
+    Include /etc/letsencrypt/options-ssl-apache.conf
+
+    ProxyPreserveHost On
+    RequestHeader set X-Forwarded-Proto "https"
+    ProxyPass / http://127.0.0.1:8000/ connectiontimeout=10 timeout=300
+    ProxyPassReverse / http://127.0.0.1:8000/
+    SetEnv proxy-sendchunked 1
+
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+    ErrorLog /var/log/httpd/ia-forthtrade-gateway-ssl-error.log
+    CustomLog /var/log/httpd/ia-forthtrade-gateway-ssl-access.log combined
+</VirtualHost>
