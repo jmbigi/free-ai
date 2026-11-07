@@ -15,20 +15,27 @@ from .config import settings
 
 # mid -> unix cooldown-until
 _COOLDOWN: dict[str, float] = {}
-# provider_id -> {ok,fail,last_ok,last_fail,last_error,latency_ms}
+# provider_id -> {ok,fail,last_ok,last_fail,last_error,latency_ms,ema_ms}
 _STATS: dict[str, dict[str, Any]] = {}
+# singleton instances + catalog cache (efficiency)
+_INSTANCES: list[Any] | None = None
+_CATALOG_CACHE: tuple[float, list[dict[str, Any]], list[dict[str, Any]]] | None = None
+_CATALOG_LOCK = asyncio.Lock()
+_CATALOG_TTL = 45.0
 
 
 def _instances():
-    return [
-        PollinationsProvider(),
-        OpenRouterProvider(), GroqProvider(), NvidiaProvider(), GeminiProvider(), CloudflareProvider(),
-        MistralProvider(), SambaNovaProvider(), CerebrasProvider(), HuggingFaceProvider(),
-        TogetherProvider(), CohereProvider(), DeepSeekProvider(), MoonshotProvider(), OpenCodeProvider(), GenericOpenAIProvider(),
-    ]
+    global _INSTANCES
+    if _INSTANCES is None:
+        _INSTANCES = [
+            PollinationsProvider(),
+            OpenRouterProvider(), GroqProvider(), NvidiaProvider(), GeminiProvider(), CloudflareProvider(),
+            MistralProvider(), SambaNovaProvider(), CerebrasProvider(), HuggingFaceProvider(),
+            TogetherProvider(), CohereProvider(), DeepSeekProvider(), MoonshotProvider(), OpenCodeProvider(), GenericOpenAIProvider(),
+        ]
+    return _INSTANCES
 
 # Ordered fallback candidates. Only active/configured providers are used (except pollinations).
-# Keep free/anonymous-friendly candidates first; provider+model combos are tried with cooldown awareness.
 AUTO_CANDIDATES = [
     ("pollinations", "openai-fast", "Pollinations anónimo"),
     ("openrouter", "openrouter/free", "OpenRouter router free"),
@@ -53,7 +60,7 @@ AUTO_CANDIDATES = [
 
 
 def _stat(pid: str) -> dict[str, Any]:
-    return _STATS.setdefault(pid, {"ok": 0, "fail": 0, "last_ok": None, "last_fail": None, "last_error": "", "latency_ms": None})
+    return _STATS.setdefault(pid, {"ok": 0, "fail": 0, "last_ok": None, "last_fail": None, "last_error": "", "latency_ms": None, "ema_ms": None})
 
 
 def _record(pid: str, *, ok: bool, ms: int | None = None, error: str = ""):
@@ -62,6 +69,8 @@ def _record(pid: str, *, ok: bool, ms: int | None = None, error: str = ""):
     s["last_" + ("ok" if ok else "fail")] = int(time.time())
     if ms is not None:
         s["latency_ms"] = ms
+        prev = s.get("ema_ms")
+        s["ema_ms"] = int(ms if prev is None else (prev * 0.7 + ms * 0.3))
     if error:
         s["last_error"] = error[:300]
 
@@ -69,30 +78,47 @@ def _record(pid: str, *, ok: bool, ms: int | None = None, error: str = ""):
 def runtime_status() -> dict[str, Any]:
     now = time.time()
     cds = {k: round(v - now, 1) for k, v in _COOLDOWN.items() if v > now}
-    return {"cooldowns": cds, "stats": _STATS, "auto_candidates": len(AUTO_CANDIDATES), "free_control": _free_control_info()}
+    cache_age = round(now - _CATALOG_CACHE[0], 1) if _CATALOG_CACHE else None
+    return {"cooldowns": cds, "stats": _STATS, "auto_candidates": len(AUTO_CANDIDATES), "free_control": _free_control_info(), "catalog_cache_age_s": cache_age, "catalog_ttl_s": _CATALOG_TTL}
 
 
-async def catalog() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    models: list[ModelInfo] = []
-    providers = []
-    for p in _instances():
-        active = p.available()
-        st = dict(_stat(p.id))
-        providers.append({"id": p.id, "label": p.label, "active": active, "always_on": p.id == "pollinations", "stats": st})
-        try:
-            listed = await p.list_models()
-        except Exception:
-            listed = []
-        if active or p.id == "pollinations":
-            for m in listed:
-                if not any(x.id == m.id for x in models):
-                    models.append(m)
-    auto = ModelInfo(
-        id="auto", provider="gateway", owned_by="gateway", upstream_model="auto",
-        capabilities=["chat", "fallback", "retry", "cache-aware"],
-        note="Fallback automático con reintentos/cooldowns entre proveedores/cuentas configurados y gratuitos disponibles. No garantiza inferencia ilimitada: los tiers gratuitos tienen cuotas/rate limits.",
-    )
-    return providers, [auto.__dict__] + [m.__dict__ for m in models]
+async def catalog(*, refresh: bool = False) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    global _CATALOG_CACHE
+    now = time.time()
+    if not refresh and _CATALOG_CACHE and (now - _CATALOG_CACHE[0]) < _CATALOG_TTL:
+        return _CATALOG_CACHE[1], _CATALOG_CACHE[2]
+    async with _CATALOG_LOCK:
+        now = time.time()
+        if not refresh and _CATALOG_CACHE and (now - _CATALOG_CACHE[0]) < _CATALOG_TTL:
+            return _CATALOG_CACHE[1], _CATALOG_CACHE[2]
+        models: list[ModelInfo] = []
+        providers = []
+        async def one(p):
+            active = p.available()
+            st = dict(_stat(p.id))
+            try:
+                listed = await asyncio.wait_for(p.list_models(), timeout=12)
+            except Exception:
+                listed = []
+            return ({"id": p.id, "label": p.label, "active": active, "always_on": p.id == "pollinations", "stats": st}, listed, active or p.id == "pollinations")
+        results = await asyncio.gather(*(one(p) for p in _instances()), return_exceptions=True)
+        for r in results:
+            if isinstance(r, Exception):
+                continue
+            info, listed, include = r
+            providers.append(info)
+            if include:
+                for m in listed:
+                    if not any(x.id == m.id for x in models):
+                        models.append(m)
+        auto = ModelInfo(
+            id="auto", provider="gateway", owned_by="gateway", upstream_model="auto",
+            capabilities=["chat", "fallback", "retry", "cache-aware", "smart-routing"],
+            note="Fallback automático eficiente con reintentos/cooldowns, selección inteligente por salud/latencia y control FREE_ONLY. No garantiza inferencia ilimitada: tiers gratuitos tienen cuotas/rate limits.",
+        )
+        out = (providers, [auto.__dict__] + [m.__dict__ for m in models])
+        _CATALOG_CACHE = (time.time(), out[0], out[1])
+        return out
 
 
 def get_provider(pid: str):
@@ -135,13 +161,44 @@ async def resolve_model(model_id: str) -> tuple[Any, ModelInfo]:
     raise ProviderError(f"Modelo desconocido '{model_id}'. Usa GET /v1/models o pasa proveedor/modelo directo.", status=400, provider="gateway")
 
 
+def _is_free_model(model: ModelInfo | dict[str, Any]) -> bool:
+    d = model.__dict__ if isinstance(model, ModelInfo) else (model if isinstance(model, dict) else {})
+    mid = str(d.get('id') or '').lower()
+    up = str(d.get('upstream_model') or '').lower()
+    provider = str(d.get('provider') or '').lower()
+    if provider == 'pollinations':
+        return True
+    if ':free' in mid or ':free' in up or mid.endswith('/free') or up == 'free' or 'openrouter/free' in mid:
+        return True
+    if 'free' in mid.split('/')[-1] and provider == 'openrouter':
+        return True
+    if provider == 'opencode' and not getattr(settings, 'opencode_api_key', ''):
+        return True
+    if getattr(settings, 'free_only', True) and not getattr(settings, 'allow_paid_models', False):
+        return False
+    return bool(d.get('free', False))
+
+
+def _free_control_info() -> dict[str, Any]:
+    return {
+        'free_only': bool(getattr(settings, 'free_only', True)),
+        'allow_paid_models': bool(getattr(settings, 'allow_paid_models', False)),
+        'verify_free_tier': bool(getattr(settings, 'verify_free_tier', True)),
+        'block_unknown_paid': bool(getattr(settings, 'block_unknown_paid', True)),
+        'policy': 'Solo enruta a fuentes gratuitas/anónimas o candidatos free-tier explícitos (:free, Pollinations). Proveedores con API key propia pueden tener créditos/cuotas; no se garantiza gratuidad ilimitada upstream.',
+        'limitation': 'No existe verificación criptográfica universal de que una cuenta upstream sea 100% gratuita; el gateway aplica control por política, allowlist free-tier y metadatos.',
+    }
+
+
+def free_control_info() -> dict[str, Any]:
+    return _free_control_info()
+
+
 def _retryable(exc: Exception) -> bool:
     msg = str(exc).lower()
     status = getattr(exc, 'status', None)
     if status in (401, 403, 404):
-        if any(s in msg for s in ['quota', 'rate limit', 'free limit', 'credit', 'insufficient', 'provider', 'temporar']):
-            return True
-        return False
+        return any(s in msg for s in ['quota', 'rate limit', 'free limit', 'credit', 'insufficient', 'provider', 'temporar'])
     if status == 400:
         return any(s in msg for s in ['rate limit', 'quota', 'free limit', 'temporar', 'retry', 'model', 'not supported'])
     if status in (408, 409, 425, 429, 402, 500, 502, 503, 504):
@@ -161,10 +218,7 @@ def _cooldown_for(exc: Exception) -> float:
     if status == 402 or 'insufficient' in msg or 'credit' in msg or 'balance' in msg or 'budget' in msg:
         return 120.0
     if status == 429 or '429' in msg or 'rate limit' in msg or 'quota' in msg or 'free limit' in msg:
-        # OpenRouter daily free quota can be long-lived; keep modest to allow other candidates now.
-        if 'per-day' in msg or 'daily' in msg:
-            return 300.0
-        return 20.0
+        return 300.0 if ('per-day' in msg or 'daily' in msg) else 20.0
     if status in (500, 502, 503, 504) or 'unavailable' in msg or 'overloaded' in msg or 'timeout' in msg:
         return 8.0
     return 3.0
@@ -193,62 +247,26 @@ def _clamp_attempts(payload: dict[str, Any]) -> int:
     return 10
 
 
-def _is_free_model(model: ModelInfo | dict[str, Any]) -> bool:
-    d = model.__dict__ if isinstance(model, ModelInfo) else (model if isinstance(model, dict) else {})
-    mid = str(d.get('id') or '').lower()
-    up = str(d.get('upstream_model') or '').lower()
-    provider = str(d.get('provider') or '').lower()
-    # Explicit block if user asked to allow paid and this is obviously paid? no: free_only controls access.
-    # Clear free signals
-    if provider == 'pollinations':
-        return True
-    if ':free' in mid or ':free' in up or mid.endswith('/free') or up == 'free' or 'openrouter/free' in mid:
-        return True
-    if 'free' in mid.split('/')[-1] and provider == 'openrouter':
-        return True
-    # Anonymous/public endpoints configured as free-tier in this gateway
-    if provider in ('opencode',) and not getattr(settings, 'opencode_api_key', ''):
-        # Public OpenCode access may be restricted; treat as free-attempt but not guaranteed.
-        return True
-    # Provider has upstream key: we cannot cryptographically prove upstream account is free-only.
-    # In FREE_ONLY mode we only allow providers/models explicitly marked as free-tier candidates unless user opts in.
-    if getattr(settings, 'free_only', True) and not getattr(settings, 'allow_paid_models', False):
-        # allow only known free-tier patterns/candidates
-        return False
-    # paid-allowed mode still warns via metadata; caller decides
-    return bool(d.get('free', False))
-
-
-def _free_control_info() -> dict[str, Any]:
-    return {
-        'free_only': bool(getattr(settings, 'free_only', True)),
-        'allow_paid_models': bool(getattr(settings, 'allow_paid_models', False)),
-        'verify_free_tier': bool(getattr(settings, 'verify_free_tier', True)),
-        'block_unknown_paid': bool(getattr(settings, 'block_unknown_paid', True)),
-        'policy': 'Solo enruta a fuentes gratuitas/anónimas o candidatos free-tier explícitos (:free, Pollinations). Proveedores con API key propia pueden tener créditos/cuotas; no se garantiza gratuidad ilimitada upstream.',
-        'limitation': 'No existe verificación criptográfica universal de que una cuenta upstream sea 100% gratuita; el gateway aplica control por política, allowlist free-tier y metadatos.',
-    }
-
-
 def _build_auto_plan(*, exclude: set[str], max_items: int) -> list[tuple[Any, ModelInfo]]:
     scored = []
-    for pid, upstream, label in AUTO_CANDIDATES:
+    for idx, (pid, upstream, label) in enumerate(AUTO_CANDIDATES):
         p = get_provider(pid)
         if not p or not (p.available() or pid == "pollinations"):
             continue
         mid = f"{pid}/{upstream}"
         if mid in exclude:
             continue
-        m = ModelInfo(id=mid, provider=pid, owned_by=pid, upstream_model=upstream, capabilities=["chat"], note=label, free=_is_free_model({'id':mid,'provider':pid,'upstream_model':upstream}))
+        m = ModelInfo(id=mid, provider=pid, owned_by=pid, upstream_model=upstream, capabilities=["chat"], note=label, free=_is_free_model({'id': mid, 'provider': pid, 'upstream_model': upstream}))
         if getattr(settings, 'free_only', True) and getattr(settings, 'block_unknown_paid', True) and not _is_free_model(m):
             continue
         left = _cooldown_left(mid)
         st = _stat(pid)
-        health = st["ok"] - st["fail"] * 0.5
-        score = (1 if left > 0 else 0, left, -health)
-        scored.append((score, p, m, mid))
+        ema = st.get('ema_ms') or 5000
+        health = (st['ok'] * 2.0) - (st['fail'] * 1.5) - (ema / 5000.0)
+        score = (1 if left > 0 else 0, left, -health, idx)
+        scored.append((score, p, m))
     scored.sort(key=lambda x: x[0])
-    return [(p, m) for _, p, m, _ in scored[:max_items]]
+    return [(p, m) for _, p, m in scored[:max_items]]
 
 
 async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -296,24 +314,22 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
             detail = last.get("error") or "Solicitud rechazada por el proveedor"
             raise ProviderError(f"{provider.id}/{model.upstream_model}: {detail}", status=getattr(provider, 'last_status', 502) or 502, provider=provider.id)
 
-    # auto/fallback plan: try up to max_attempts distinct candidates, skipping long cooldowns when possible
     for provider, model in _build_auto_plan(exclude=tried, max_items=max_attempts * 3):
         if len([a for a in attempts if not a.get('ok')]) >= max_attempts:
             break
         if _cooldown_left(model.id) > 15 and any(p.available() and not _on_cooldown(f"{p.id}/{u}") for p in _instances() for pid2, u, _ in AUTO_CANDIDATES if pid2 == p.id):
-            # skip very hot cooldown candidates when alternatives exist
             tried.add(model.id)
             continue
         tried.add(model.id)
         data = await try_one(provider, model)
         if data:
             return data, attempts
-        await asyncio.sleep(0.15)
+        await asyncio.sleep(0.05)
 
     detail = " | ".join(f"{a['provider']}/{a['model'].split('/',1)[-1]}: {a.get('error','')[:140]}" for a in attempts[-6:]) or "Sin proveedores disponibles"
     raise ProviderError(
         f"Todos los proveedores/cuentas disponibles fallaron o están limitados en este intento. {detail}. "
-        "Sugerencia: usa model:\"auto\" con peticiones espaciadas/caché, o agrega más cuentas gratuitas en .env. "
+        "Sugerencia: usa model:\"auto\" con caché o agrega más cuentas gratuitas en .env. "
         "Limitación real: los tiers gratuitos tienen cuotas/rate limits/créditos.",
         status=502, provider="gateway",
     )
@@ -347,7 +363,3 @@ async def stream_with_fallback(payload: dict[str, Any]) -> AsyncIterator[bytes]:
             _record(p.id, ok=False, ms=int((time.time() - t0) * 1000), error=err)
             continue
     raise ProviderError("Streaming fallback agotado: " + " | ".join(errors[-4:]), status=502, provider="gateway")
-
-
-def free_control_info() -> dict[str, Any]:
-    return _free_control_info()
