@@ -244,7 +244,8 @@ def _clamp_attempts(payload: dict[str, Any]) -> int:
                 return max(1, min(10, int(src.get('max_retries', src.get('retries', 10)))))
             except Exception:
                 break
-    return 10
+    # Fast default for interactive clients; explicit max_retries allows deeper fallback.
+    return 4
 
 
 def _build_auto_plan(*, exclude: set[str], max_items: int) -> list[tuple[Any, ModelInfo]]:
@@ -260,9 +261,16 @@ def _build_auto_plan(*, exclude: set[str], max_items: int) -> list[tuple[Any, Mo
         if getattr(settings, 'free_only', True) and getattr(settings, 'block_unknown_paid', True) and not _is_free_model(m):
             continue
         left = _cooldown_left(mid)
+        if left > 8:
+            continue  # skip hot cooldowns for latency
         st = _stat(pid)
         ema = st.get('ema_ms') or 5000
-        health = (st['ok'] * 2.0) - (st['fail'] * 1.5) - (ema / 5000.0)
+        fail_penalty = min(st['fail'], 20) * 2.0
+        # Prefer pollinations/openai-fast strongly when not cooling down (fast anonymous free path)
+        fast_bonus = 12.0 if mid == 'pollinations/openai-fast' and left <= 0 else 0.0
+        if mid.startswith('pollinations/') and left <= 0:
+            fast_bonus = max(fast_bonus, 6.0)
+        health = (st['ok'] * 2.0) - fail_penalty - (ema / 3000.0) + fast_bonus
         score = (1 if left > 0 else 0, left, -health, idx)
         scored.append((score, p, m))
     scored.sort(key=lambda x: x[0])
@@ -328,38 +336,41 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
             err.attempts = attempts  # type: ignore[attr-defined]
             raise err
 
-    # Build plan and attempt across providers; for free-tier-only pools, respect short cooldown waits when needed.
-    while len([a for a in attempts]) < max_attempts:
-        plan = _build_auto_plan(exclude=tried, max_items=max_attempts * 4)
+    # Build plan and attempt across providers; keep latency bounded for auto.
+    deadline = time.time() + max(8, min(45, int(getattr(settings, 'request_timeout', 45) or 45)))
+    while len(attempts) < max_attempts and time.time() < deadline:
+        plan = _build_auto_plan(exclude=tried, max_items=max_attempts * 2)
         if not plan:
-            # If everything is on cooldown, wait briefly for the soonest viable candidate (max 10s) up to max_attempts budget.
             viable = []
             for pid, upstream, label in AUTO_CANDIDATES:
                 p = get_provider(pid)
                 if not p or not (p.available() or pid == "pollinations"): continue
                 mid = f"{pid}/{upstream}"; m = ModelInfo(id=mid, provider=pid, owned_by=pid, upstream_model=upstream, capabilities=["chat"], note=label)
                 if getattr(settings,'free_only',True) and getattr(settings,'block_unknown_paid',True) and not _is_free_model(m): continue
-                viable.append((mid, _cooldown_left(mid), p, m))
+                left = _cooldown_left(mid)
+                if left <= 3 and mid not in tried:
+                    viable.append((mid, left, p, m))
             viable.sort(key=lambda x: x[1])
-            if viable and viable[0][1] <= 12 and len(attempts) < max_attempts:
-                wait = min(12.0, viable[0][1] + 0.2)
+            if viable and time.time() + viable[0][1] < deadline and len(attempts) < max_attempts:
+                wait = min(3.0, viable[0][1] + 0.05)
                 attempts.append({"provider":"gateway","model":"wait","ok":False,"ms":int(wait*1000),"error":f"Esperando cooldown {wait:.1f}s para {viable[0][0]}","retryable":True})
                 await asyncio.sleep(wait)
                 tried.discard(viable[0][0])
-                plan = _build_auto_plan(exclude=tried, max_items=max_attempts * 2)
+                plan = _build_auto_plan(exclude=tried, max_items=max_attempts)
             if not plan:
                 break
         made = False
         for provider, model in plan:
-            if len(attempts) >= max_attempts:
+            if len(attempts) >= max_attempts or time.time() >= deadline:
                 break
-            if _cooldown_left(model.id) > 12 and any(not _on_cooldown(f"{pid2}/{u}") for pid2,u,_ in AUTO_CANDIDATES if (pp:=get_provider(pid2)) and (pp.available() or pid2=='pollinations')):
+            if _cooldown_left(model.id) > 3:
                 tried.add(model.id); continue
             tried.add(model.id); made = True
             data = await try_one(provider, model)
             if data:
                 return data, attempts
-            await asyncio.sleep(0.05)
+            if time.time() >= deadline:
+                break
         if not made:
             break
     _raise_final()

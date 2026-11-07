@@ -68,7 +68,8 @@ class OpenAICompatProvider(BaseProvider):
     async def chat(self, payload: dict[str, Any], model: ModelInfo) -> dict[str, Any]:
         body = self._prepare(payload, model.upstream_model or model.id)
         body["stream"] = False
-        async with httpx.AsyncClient(timeout=180) as c:
+        timeout = httpx.Timeout(float(getattr(__import__('app.config',fromlist=['settings']).settings,'request_timeout',45) or 45), connect=8.0)
+        async with httpx.AsyncClient(timeout=timeout) as c:
             r = await c.post(f"{self.base_url.rstrip('/')}/chat/completions", json=body, headers=self._headers())
         if r.status_code >= 400:
             raise ProviderError(f"{self.label} error {r.status_code}: {r.text[:350]}", status=r.status_code, provider=self.id)

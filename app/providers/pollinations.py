@@ -56,7 +56,8 @@ class PollinationsProvider(BaseProvider):
     async def chat(self, payload: dict[str, Any], model: ModelInfo) -> dict[str, Any]:
         body = self._prepare(payload, model.upstream_model or "openai-fast")
         body["stream"] = False
-        async with httpx.AsyncClient(timeout=120) as c:
+        timeout = httpx.Timeout(25.0, connect=8.0)
+        async with httpx.AsyncClient(timeout=timeout) as c:
             r = await c.post(f"{BASE}/openai", json=body)
         if r.status_code >= 400:
             raise ProviderError(f"Pollinations error {r.status_code}: {r.text[:350]}", status=r.status_code, provider=self.id)
