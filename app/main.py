@@ -2,21 +2,25 @@ from __future__ import annotations
 import copy
 import json
 import time
+import traceback
+import uuid
 from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from .auth import require_api_key_flexible
 from .cache import cache_key, cacheable, response_cache
 from .config import settings
 from .context import compress_messages
 from .providers.base import ProviderError
 from .router import catalog, execute_with_fallback, stream_with_fallback, runtime_status, free_control_info
+from .observability import metrics
 from .help_page import render_help_html, help_payload
 
 app = FastAPI(
     title="Free AI Gateway",
-    version="2.1.0",
+    version="2.2.0",
     description=(
         "Gateway productivo OpenAI-compatible con una API key simple (.env API_KEY). "
         "Agrega y enruta a APIs remotas gratuitas/configuradas con fallback automático, "
@@ -29,6 +33,88 @@ app.add_middleware(
     allow_origins=["*"], allow_credentials=False,
     allow_methods=["*"], allow_headers=["*"], expose_headers=["*"],
 )
+
+REQUEST_ID_HEADER = "x-request-id"
+MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MiB safety cap for JSON payloads
+
+
+def _rid(request: Request) -> str:
+    rid = (request.headers.get(REQUEST_ID_HEADER) or "").strip()
+    if rid and len(rid) <= 128:
+        return rid
+    return uuid.uuid4().hex
+
+
+def _openai_error(message: str, *, type_: str = "gateway_error", code: Any = None, param: Any = None, request_id: str = "") -> dict[str, Any]:
+    err = {"message": str(message)[:2000], "type": type_}
+    if param is not None:
+        err["param"] = param
+    if code is not None:
+        err["code"] = code
+    if request_id:
+        err["request_id"] = request_id
+    return {"error": err}
+
+
+@app.middleware("http")
+async def observability_middleware(request: Request, call_next):
+    rid = _rid(request)
+    request.state.request_id = rid
+    t0 = time.time()
+    status = 500
+    err_msg = ""
+    try:
+        # cheap body-size guard for mutating JSON endpoints
+        if request.method in ("POST", "PUT", "PATCH"):
+            cl = request.headers.get("content-length")
+            if cl and cl.isdigit() and int(cl) > MAX_BODY_BYTES:
+                status = 413
+                return JSONResponse(status_code=413, content=_openai_error(f"Request body too large (max {MAX_BODY_BYTES} bytes)", type_="invalid_request_error", code=413, request_id=rid), headers={REQUEST_ID_HEADER: rid, "x-gateway-version": app.version})
+        response = await call_next(request)
+        status = response.status_code
+        response.headers[REQUEST_ID_HEADER] = rid
+        response.headers["x-gateway-version"] = app.version
+        return response
+    except Exception as e:
+        err_msg = str(e)
+        raise
+    finally:
+        ms = int((time.time() - t0) * 1000)
+        metrics.observe(path=request.url.path, status=status, ms=ms, request_id=rid, error=err_msg)
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    rid = getattr(request.state, "request_id", "") or _rid(request)
+    detail = exc.detail
+    if isinstance(detail, dict) and "message" in detail:
+        body = {"error": {**detail}}
+        body["error"].setdefault("type", "gateway_error")
+        body["error"].setdefault("code", exc.status_code)
+        body["error"]["request_id"] = rid
+    elif isinstance(detail, dict) and "error" in detail:
+        body = detail
+        if isinstance(body.get("error"), dict):
+            body["error"]["request_id"] = rid
+    else:
+        body = _openai_error(detail if isinstance(detail, str) else json.dumps(detail, ensure_ascii=False), code=exc.status_code, request_id=rid,
+                             type_="authentication_error" if exc.status_code == 401 else "invalid_request_error" if exc.status_code < 500 else "gateway_error")
+    return JSONResponse(status_code=exc.status_code, content=body, headers={REQUEST_ID_HEADER: rid, "x-gateway-version": app.version})
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    rid = getattr(request.state, "request_id", "") or _rid(request)
+    msg = "; ".join((e.get("msg") or str(e)) for e in exc.errors()[:5])[:800]
+    return JSONResponse(status_code=422, content=_openai_error(msg or "Validation error", type_="invalid_request_error", code=422, request_id=rid), headers={REQUEST_ID_HEADER: rid})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    rid = getattr(request.state, "request_id", "") or _rid(request)
+    # never leak stack traces/secrets
+    metrics.observe(path=request.url.path, status=500, ms=0, request_id=rid, error=str(exc))
+    return JSONResponse(status_code=500, content=_openai_error("Internal gateway error", type_="gateway_error", code=500, request_id=rid), headers={REQUEST_ID_HEADER: rid})
 
 INDEX_HTML = r"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -125,10 +211,12 @@ async def index():
 async def health():
     providers, models = await catalog()
     active = [p["id"] for p in providers if p.get("active")]
+    snap = metrics.snapshot()
     return {
         "status": "ok",
         "time": int(time.time()),
         "version": app.version,
+        "uptime_s": snap.get("uptime_s", 0),
         "service": "free-ai-gateway",
         "active_providers": active,
         "providers": providers,
@@ -333,6 +421,105 @@ for path in [
     "/v1/completions", "/completions",
 ]:
     app.add_api_route(path, _chat, methods=["POST"], dependencies=[Depends(require_api_key_flexible)])
+
+
+
+@app.get('/readyz')
+@app.get('/v1/readyz')
+async def readyz():
+    # lightweight readiness (no upstream calls)
+    return {'status':'ready','time':int(time.time()),'version':app.version}
+
+async def _metrics_response(_: bool = Depends(require_api_key_flexible)):
+    return {'object':'metrics','time':int(time.time()), **metrics.snapshot(), 'runtime': runtime_status(), 'free_control': free_control_info()}
+
+for path in ['/v1/metrics','/metrics']:
+    app.add_api_route(path, _metrics_response, methods=['GET'], dependencies=[Depends(require_api_key_flexible)])
+
+
+def _responses_to_chat(body: dict[str, Any]) -> dict[str, Any]:
+    # Minimal OpenAI Responses -> Chat Completions compatibility for common clients.
+    out = dict(body)
+    if 'messages' not in out:
+        inp = out.pop('input', None)
+        msgs = []
+        if isinstance(inp, str):
+            msgs = [{'role':'user','content':inp}]
+        elif isinstance(inp, list):
+            for item in inp:
+                if isinstance(item, dict):
+                    role = item.get('role') or 'user'
+                    c = item.get('content')
+                    if isinstance(c, list):
+                        parts = []
+                        for x in c:
+                            if isinstance(x, dict):
+                                parts.append(str(x.get('text') or x.get('input_text') or x.get('output_text') or ''))
+                            else:
+                                parts.append(str(x))
+                        c = '\n'.join([p for p in parts if p])
+                    if c is not None:
+                        msgs.append({'role': role, 'content': c if isinstance(c, str) else str(c)})
+        if not msgs and out.get('instructions'):
+            msgs = [{'role':'system','content':str(out.pop('instructions'))}]
+        if msgs:
+            out['messages'] = msgs
+    out.setdefault('model','auto')
+    if 'max_output_tokens' in out and 'max_tokens' not in out:
+        out['max_tokens'] = out.pop('max_output_tokens')
+    return out
+
+async def _responses(request: Request, _: bool = Depends(require_api_key_flexible)):
+    try:
+        raw = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail='Invalid JSON body')
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail='Body must be a JSON object')
+    chat = _responses_to_chat(raw)
+    # non-stream returns a lightweight Responses-shaped envelope
+    if not chat.get('stream'):
+        chat['stream'] = False
+        # reuse chat handler logic by normalizing through _chat internals: call execute path
+        before_chars = 0
+        try:
+            before_chars = sum(len(str(m.get('content',''))) for m in (chat.get('messages') or []) if isinstance(m, dict))
+        except Exception:
+            pass
+        optimized = compress_messages(copy.deepcopy(chat))
+        payload_for_cache = copy.deepcopy(optimized)
+        key = cache_key(payload_for_cache) if cacheable(payload_for_cache) else None
+        if key:
+            cached = response_cache.get(key)
+            if cached:
+                text = ((cached.get('choices') or [{}])[0].get('message') or {}).get('content','')
+                resp = {'id': cached.get('id') or f"resp_{uuid.uuid4().hex[:24]}", 'object':'response','created_at':cached.get('created') or int(time.time()),'model':cached.get('model'),'status':'completed','output_text':text,'output':[{'type':'message','role':'assistant','content':[{'type':'output_text','text':text}]}],'gateway':{**(cached.get('gateway') or {}), 'cache':{'hit':True}}}
+                return JSONResponse(resp)
+        try:
+            data, _ = await execute_with_fallback(optimized)
+        except ProviderError as e:
+            detail = {"message": str(e), "type": "provider_error", "provider": e.provider, "model": optimized.get("model"), "code": e.status}
+            atts = getattr(e, 'attempts', None)
+            if atts: detail["attempts"] = atts; detail["attempt_count"] = len(atts)
+            raise HTTPException(status_code=e.status, detail=detail)
+        text = ((data.get('choices') or [{}])[0].get('message') or {}).get('content','')
+        resp = {'id': f"resp_{uuid.uuid4().hex[:24]}", 'object':'response','created_at':data.get('created') or int(time.time()),'model':data.get('model'),'status':'completed','output_text':text,'output':[{'type':'message','role':'assistant','content':[{'type':'output_text','text':text}]}],'usage':data.get('usage'),'gateway':data.get('gateway')}
+        if key and text:
+            response_cache.set(key, data, int(getattr(settings, 'cache_ttl_seconds', 300)))
+        return JSONResponse(resp)
+    # stream fallback as chat SSE (clients expecting Responses streaming should tolerate; best-effort)
+    chat['stream'] = True
+    async def gen():
+        try:
+            async for chunk in stream_with_fallback(chat):
+                yield chunk
+        except ProviderError as e:
+            err = {"error": {"message": str(e), "type": "provider_error", "provider": e.provider, "code": e.status}}
+            yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n".encode(); yield b"data: [DONE]\n\n"
+    return StreamingResponse(gen(), media_type='text/event-stream', headers={'Cache-Control':'no-cache','X-Accel-Buffering':'no'})
+
+for path in ['/v1/responses','/responses','/openai/v1/responses']:
+    app.add_api_route(path, _responses, methods=['POST'], dependencies=[Depends(require_api_key_flexible)])
 
 @app.get("/v1")
 @app.get("/openai/v1")
