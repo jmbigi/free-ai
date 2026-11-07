@@ -141,7 +141,7 @@ Base URL: {v1}
 API Key:  ${key}
 Model:    auto</pre><p class="m">Usa la API key del gateway (valor o variable {key}).</p></div>
 </div>
-<div class="card"><h2>Herramientas / function calling</h2><p class="m">Compatible con <code>tools</code>/<code>tool_choice</code> y legacy <code>functions</code>/<code>function_call</code>. El gateway preserva tool calls y aplica compatibilidad cuando el proveedor upstream es limitado.</p><pre>{"model":"auto","messages":[{"role":"user","content":"Weather in Paris?"}],"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"tool_choice":"auto"}</pre></div>
+<div class="card"><h2>Herramientas / function calling</h2><p class="m">Compatible con <code>tools</code>/<code>tool_choice</code> y legacy <code>functions</code>/<code>function_call</code>. El gateway preserva tool calls y aplica compatibilidad cuando el proveedor upstream es limitado.</p><pre>{{"model":"auto","messages":[{{"role":"user","content":"Weather in Paris?"}}],"tools":[{{"type":"function","function":{{"name":"get_weather","parameters":{{"type":"object","properties":{{"city":{{"type":"string"}}}},"required":["city"]}}}}}}],"tool_choice":"auto"}}</pre></div>
 <div class="card"><h2>Prueba rápida</h2><pre>export {key}="TU_API_KEY_GATEWAY"
 curl -sS {v1}/chat/completions \\
   -H "Authorization: Bearer ${key}" \\
