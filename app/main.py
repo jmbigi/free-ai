@@ -431,6 +431,26 @@ def _apply_cache_headers(data: dict[str, Any], *, hit: bool, key: str | None = N
         data["gateway"]["cache"]["key"] = key[:16]
     return data
 
+
+
+async def _embeddings_response(request: Request, _: bool = Depends(require_api_key_flexible)):
+    # Honest compatibility: this gateway aggregates chat/free text sources; embeddings providers
+    # are not configured here. Clients should use a dedicated embeddings endpoint/provider.
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    raise HTTPException(status_code=501, detail={
+        'message': 'Embeddings not supported by this free gateway instance. Configure a dedicated embeddings-compatible upstream or use a provider embeddings API directly.',
+        'type': 'unsupported_feature',
+        'code': 501,
+        'requested_model': (body or {}).get('model') if isinstance(body, dict) else None,
+        'suggestion': 'Use /v1/chat/completions, /v1/responses, /v1/search, or /v1/decision; add an embeddings upstream if needed.',
+    })
+
+for path in ['/v1/embeddings', '/embeddings', '/openai/v1/embeddings', '/api/v1/embeddings']:
+    app.add_api_route(path, _embeddings_response, methods=['POST'], dependencies=[Depends(require_api_key_flexible)])
+
 async def _chat(request: Request, _: bool = Depends(require_api_key_flexible)):
     try:
         raw = await request.json()
@@ -455,6 +475,10 @@ async def _chat(request: Request, _: bool = Depends(require_api_key_flexible)):
             _apply_cache_headers(cached, hit=True, key=key)
             return JSONResponse(cached)
     stream = bool(optimized.get("stream"))
+    # helpful for coding agents/SDKs: request usage in stream when supported
+    if stream and isinstance(optimized.get('stream_options'), dict) is False and optimized.get('stream_options') is None:
+        optimized['stream_options'] = {'include_usage': True}
+
     try:
         if stream:
             async def gen():
