@@ -266,6 +266,7 @@ async def index():
     return INDEX_HTML
 
 @app.get("/health")
+@app.head("/health")
 @app.get("/v1/health")
 @app.get("/openai/v1/health")
 async def health():
