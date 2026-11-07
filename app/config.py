@@ -5,6 +5,7 @@ from dotenv import dotenv_values, load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 ENV_FILE = BASE_DIR / ".env"
+_env = ENV_FILE  # backward compat for auth/app code expecting _env
 load_dotenv(ENV_FILE, override=False)
 
 
@@ -17,7 +18,6 @@ def _read_env(name: str, default: str = "") -> str:
         for k in (name, name.upper(), name.lower()):
             if k in data and data[k] is not None and str(data[k]).strip() != "":
                 return str(data[k]).strip()
-        # alias map for common key names
         aliases = {
             'HUGGINGFACE_API_KEY': ['HUGGING_FACE_API_KEY', 'HF_API_KEY', 'HF_TOKEN'],
             'HUGGING_FACE_API_KEY': ['HUGGINGFACE_API_KEY', 'HF_API_KEY', 'HF_TOKEN'],
@@ -74,14 +74,13 @@ class SettingsProxy:
     def app_name(self) -> str:
         return _read_env("APP_NAME", "Free AI Gateway")
 
-    # Free-only controls: gateway must only route to free-tier/anonymous/configured-free sources.
+    # Free-only controls
     @property
     def free_only(self) -> bool:
         return _read_bool("FREE_ONLY", True)
 
     @property
     def allow_paid_models(self) -> bool:
-        # Explicit opt-in required; default false. Even then, upstream billing/terms apply.
         return _read_bool("ALLOW_PAID_MODELS", False)
 
     @property
@@ -90,10 +89,9 @@ class SettingsProxy:
 
     @property
     def block_unknown_paid(self) -> bool:
-        # When free_only, block models/providers not clearly identified as free/anonymous/free-tier.
         return _read_bool("BLOCK_UNKNOWN_PAID", True)
 
-    # Cache controls (prompt/response cache)
+    # Cache controls
     @property
     def cache_enabled(self) -> bool:
         return _read_bool("CACHE_ENABLED", True)
@@ -110,7 +108,7 @@ class SettingsProxy:
     def cache_max_prompt_chars(self) -> int:
         return max(500, _read_int("CACHE_MAX_PROMPT_CHARS", 24000))
 
-    # Context compression controls
+    # Context compression
     @property
     def context_compress_enabled(self) -> bool:
         return _read_bool("CONTEXT_COMPRESS_ENABLED", True)
@@ -207,6 +205,21 @@ class SettingsProxy:
     @property
     def custom_openai_models(self) -> str:
         return _read_env("CUSTOM_OPENAI_MODELS", "")
+
+
+    # Backward-compatible aliases used by providers
+    @property
+    def openai_compatible_api_key(self) -> str:
+        return self.custom_openai_api_key
+    @property
+    def openai_compatible_base_url(self) -> str:
+        return self.custom_openai_base_url
+    @property
+    def openai_compatible_models(self) -> str:
+        return self.custom_openai_models
+    @property
+    def cache_max_items(self) -> int:
+        return self.cache_max_entries
 
 
 settings = SettingsProxy()
