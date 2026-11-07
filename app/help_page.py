@@ -31,6 +31,7 @@ def help_payload(base_url: str = BASE) -> dict:
             "openai_compatible": True,
             "chat_completions": True,
             "responses_basic": True,
+            "tool_calling": True,
             "stream_sse": True,
             "input_aliases": ["messages", "prompt", "input"],
             "token_aliases": ["max_tokens", "max_completion_tokens", "max_output_tokens"],
@@ -49,6 +50,7 @@ def help_payload(base_url: str = BASE) -> dict:
             "models": f"{v1}/models",
             "chat_completions": f"{v1}/chat/completions",
             "responses": f"{v1}/responses",
+            "chat_with_tools": f"{v1}/chat/completions (tools/tool_choice, legacy functions)",
             "providers": f"{v1}/providers",
             "audit": f"{v1}/audit",
             "free": f"{v1}/free",
@@ -139,6 +141,7 @@ Base URL: {v1}
 API Key:  ${key}
 Model:    auto</pre><p class="m">Usa la API key del gateway (valor o variable {key}).</p></div>
 </div>
+<div class="card"><h2>Herramientas / function calling</h2><p class="m">Compatible con <code>tools</code>/<code>tool_choice</code> y legacy <code>functions</code>/<code>function_call</code>. El gateway preserva tool calls y aplica compatibilidad cuando el proveedor upstream es limitado.</p><pre>{"model":"auto","messages":[{"role":"user","content":"Weather in Paris?"}],"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"tool_choice":"auto"}</pre></div>
 <div class="card"><h2>Prueba rápida</h2><pre>export {key}="TU_API_KEY_GATEWAY"
 curl -sS {v1}/chat/completions \\
   -H "Authorization: Bearer ${key}" \\
@@ -154,3 +157,5 @@ curl -sS {v1}/chat/completions \\
 <div class="card warn"><h2>Limitaciones reales (obligatorias)</h2><p class="m"><b>Gratis/controlado ≠ ilimitado.</b> <code>FREE_ONLY</code> prioriza fuentes free-tier/anónimas explícitas; proveedores upstream imponen cuotas, rate limits, créditos, términos o capacidad variable. El gateway hace fallback, caché y control, pero <b>no puede garantizar inferencia remota avanzada gratuita ilimitada</b>. Rota la API key si se expuso. No envíes claves upstream a clientes.</p></div>
 <div class="card"><h2>Ayuda JSON</h2><p class="m"><a href="/help.json">/help.json</a> · <a href="/v1/help">/v1/help</a></p><pre>{j}</pre></div>
 </div></body></html>'''
+
+# tool calling note appended? easier to patch via python

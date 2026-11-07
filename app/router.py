@@ -12,6 +12,7 @@ from .providers.gemini import GeminiProvider
 from .providers.cloudflare import CloudflareProvider
 from .providers.base import ModelInfo, ProviderError
 from .config import settings
+from .tool_support import has_tools, inject_tool_prompt, maybe_synthesize_tool_calls
 
 # mid -> unix cooldown-until
 _COOLDOWN: dict[str, float] = {}
@@ -293,7 +294,9 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
     async def try_one(provider, model) -> dict[str, Any] | None:
         t0 = time.time()
         try:
-            data = await provider.chat(payload, model)
+            send = inject_tool_prompt(payload) if has_tools(payload) else payload
+            data = await provider.chat(send, model)
+            data = maybe_synthesize_tool_calls(data, payload)
             ms = int((time.time() - t0) * 1000)
             _record(provider.id, ok=True, ms=ms)
             attempts.append({"provider": provider.id, "model": model.id, "ok": True, "ms": ms})
