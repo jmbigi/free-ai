@@ -1,0 +1,236 @@
+from __future__ import annotations
+import copy
+import json
+import time
+from typing import Any
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from .auth import require_api_key_flexible
+from .cache import cache_key, cacheable, response_cache
+from .config import settings
+from .context import compress_messages
+from .providers.base import ProviderError
+from .router import catalog, execute_with_fallback, stream_with_fallback
+
+app = FastAPI(
+    title="Free AI Gateway",
+    version="2.1.0",
+    description=(
+        "Gateway productivo OpenAI-compatible con una API key simple (.env API_KEY). "
+        "Agrega y enruta a APIs remotas gratuitas/configuradas con fallback automático, "
+        "caché de prompts/respuestas y compresión de contextos."
+    ),
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], allow_credentials=False,
+    allow_methods=["*"], allow_headers=["*"], expose_headers=["*"],
+)
+
+INDEX_HTML = r"""<!doctype html>
+<html lang="es"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Free AI Gateway</title>
+<style>
+:root{--bg:#07111f;--p:#0f1a2f;--p2:#0b1426;--t:#edf4ff;--m:#9db2d3;--l:#203456;--a:#7c3aed;--b:#06b6d4;--ok:#22c55e;--bad:#ef4444}
+*{box-sizing:border-box} body{margin:0;color:var(--t);font:15px/1.45 Inter,system-ui,Arial;background:radial-gradient(900px 500px at 0 -10%,#17305d,transparent),radial-gradient(700px 400px at 100% 0,#27135a,transparent),var(--bg)}
+.w{max-width:1280px;margin:0 auto;padding:22px}.h{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:14px} h1{margin:0;font-size:30px}
+.s{color:var(--m);max-width:980px;margin-top:6px}.g{display:grid;grid-template-columns:390px 1fr;gap:14px}@media(max-width:980px){.g{grid-template-columns:1fr}}
+.c{background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.015));border:1px solid var(--l);border-radius:18px;padding:16px}
+label{display:block;font-size:12px;color:var(--m);margin:10px 0 6px} input,select,textarea,button{width:100%;border:1px solid var(--l);background:var(--p2);color:var(--t);border-radius:12px;padding:11px 12px;font:inherit}
+textarea{min-height:220px;resize:vertical} button{cursor:pointer;border:none;background:linear-gradient(135deg,var(--a),#2563eb);font-weight:700}
+.r{display:flex;gap:8px}.r>*{flex:1} pre{margin:0;white-space:pre-wrap;word-break:break-word;background:#081120;border:1px solid var(--l);border-radius:12px;padding:12px;min-height:160px}
+.pill{display:inline-flex;gap:6px;align-items:center;padding:5px 10px;border:1px solid var(--l);border-radius:999px;color:var(--m);font-size:12px;margin:3px 6px 0 0;background:rgba(255,255,255,.02)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--bad)} .dot.on{background:var(--ok)} code{background:#081120;border:1px solid var(--l);padding:1px 6px;border-radius:6px}
+.meta{color:var(--m);font-size:12px;margin-top:10px} a{color:#8bdcff;text-decoration:none}
+</style></head><body><div class="w">
+<div class="h"><div><h1>Free AI Gateway</h1><div class="s">Servicio productivo OpenAI-compatible con <b>una API key simple</b> (<code>API_KEY</code>). Agrega APIs remotas gratuitas/configuradas, usa <code>model:"auto"</code> con fallback, e incluye <b>caché de prompts/respuestas</b> y <b>compresión de contexto</b> para clientes como KiloCode/OpenCode/DeepSeek harness.</div></div>
+<div><a class="pill" href="/docs" target="_blank">Swagger</a><a class="pill" href="/health" target="_blank">Health</a><a class="pill" href="/v1/cache" target="_blank">Cache</a></div></div>
+<div class="g"><div class="c">
+<label>API Key (gateway)</label><input id="key" type="password" placeholder="API_KEY del .env"/>
+<label>Modelo</label><select id="model"><option value="auto">auto (fallback remoto)</option></select>
+<div class="r"><div><label>temperature</label><input id="temp" type="number" step="0.1" value="0"/></div><div><label>max_tokens</label><input id="max_tokens" type="number" value="512"/></div></div>
+<div class="r" style="margin-top:10px"><button id="send">Enviar</button><button id="reload" style="background:#16233d;border:1px solid var(--l)">Refrescar</button></div>
+<label>Proveedores/cuentas activos</label><div id="providers"></div>
+<div class="meta">Base URLs: <code>/v1</code>, <code>/openai/v1</code>, <code>/api/v1</code>. Auth: <code>Authorization: Bearer</code>, <code>api-key</code>, <code>x-api-key</code>, <code>?key=</code>/<code>?api_key=</code>. Caché automática para peticiones determinísticas (<code>temperature=0</code>) o <code>cache:true</code>. Compresión automática al superar <code>CONTEXT_MAX_CHARS</code> o con <code>compress_context:true</code>.</div>
+</div><div class="c"><label>Prompt</label><textarea id="prompt">Responde solo: OK</textarea><label>Respuesta</label><pre id="out">Listo.</pre></div></div></div>
+<script>
+const $=id=>document.getElementById(id);
+async function api(path,opts={}){const key=$('key').value.trim();const h={'Content-Type':'application/json',...(opts.headers||{})}; if(key) h.Authorization='Bearer '+key; const r=await fetch(path,{...opts,headers:h}); const t=await r.text(); let d; try{d=JSON.parse(t)}catch{d=t} if(!r.ok) throw {status:r.status,data:d}; return d}
+async function load(){ $('out').textContent='Cargando...'; try{ const m=await api('/v1/models'); const s=$('model'),cur=s.value; s.innerHTML='<option value="auto">auto (fallback remoto)</option>'; for(const it of (m.data||[]).filter(x=>x.id!=='auto')){const o=document.createElement('option'); o.value=it.id; o.textContent=it.id; s.appendChild(o)} if([...s.options].some(o=>o.value===cur)) s.value=cur; const p=$('providers'); p.innerHTML=''; for(const it of (m.providers||[])){const sp=document.createElement('span'); sp.className='pill'; sp.innerHTML=`<span class="dot ${it.active?'on':''}"></span>${it.id}`; p.appendChild(sp)} $('out').textContent='OK. Usa /v1 como base URL OpenAI-compatible. temperature=0 habilita caché por defecto.' }catch(e){$('out').textContent=JSON.stringify(e,null,2)} }
+$('reload').onclick=load; $('send').onclick=async()=>{ $('out').textContent='Generando...'; try{ const d=await api('/v1/chat/completions',{method:'POST',body:JSON.stringify({model:$('model').value||'auto',messages:[{role:'user',content:$('prompt').value}],temperature:parseFloat($('temp').value||'0'),max_tokens:parseInt($('max_tokens').value||'512',10),cache:true,compress_context:true})}); $('out').textContent=(d?.choices?.[0]?.message?.content||JSON.stringify(d,null,2))+`\n\n---\nprovider=${d.provider||'?'} model=${d.model||'?'} cache=${JSON.stringify(d.gateway?.cache||{})} context=${JSON.stringify(d.gateway?.context||d.gateway?.context_compressed||false)}` }catch(e){$('out').textContent=JSON.stringify(e,null,2)} }; load();
+</script></body></html>"""
+
+def _normalize_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+    body = dict(payload)
+    body.setdefault("model", "auto")
+    if "max_completion_tokens" in body and "max_tokens" not in body:
+        body["max_tokens"] = body.get("max_completion_tokens")
+    body.pop("max_completion_tokens", None)
+    if "messages" not in body and "prompt" in body:
+        prompt = body.get("prompt")
+        if isinstance(prompt, list):
+            prompt = "\n".join(str(x) for x in prompt)
+        body["messages"] = [{"role": "user", "content": str(prompt)}]
+        body.pop("prompt", None)
+    if "input" in body and "messages" not in body:
+        inp = body.get("input")
+        if isinstance(inp, str):
+            body["messages"] = [{"role": "user", "content": inp}]
+            body.pop("input", None)
+        elif isinstance(inp, list):
+            msgs = []
+            for item in inp:
+                if isinstance(item, dict) and item.get("content") is not None:
+                    role = item.get("role") or "user"
+                    c = item.get("content")
+                    if isinstance(c, list):
+                        c = "\n".join(str(x.get('text','') if isinstance(x,dict) else x) for x in c)
+                    msgs.append({"role": role, "content": str(c)})
+            if msgs:
+                body["messages"] = msgs
+                body.pop("input", None)
+    if "messages" not in body:
+        raise HTTPException(status_code=400, detail="Missing messages/prompt/input")
+    return body
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    return INDEX_HTML
+
+@app.get("/health")
+@app.get("/v1/health")
+@app.get("/openai/v1/health")
+async def health():
+    providers, models = await catalog()
+    active = [p["id"] for p in providers if p.get("active")]
+    return {
+        "status": "ok",
+        "time": int(time.time()),
+        "version": app.version,
+        "service": "free-ai-gateway",
+        "active_providers": active,
+        "providers": providers,
+        "models": len(models),
+        "cache": response_cache.info(),
+        "context_compression": {
+            "enabled": bool(getattr(settings, 'context_compress_enabled', True)),
+            "max_chars": int(getattr(settings, 'context_max_chars', 120000)),
+            "keep_last_messages": int(getattr(settings, 'context_keep_last_messages', 12)),
+            "message_max_chars": int(getattr(settings, 'context_message_max_chars', 12000)),
+        },
+        "auth": "Simple API key from .env (API_KEY). Send Authorization: Bearer <key>, api-key, x-api-key, key, or ?api_key=/?key=.",
+        "compatibility": {
+            "base_urls": ["/v1", "/openai/v1", "/api/v1"],
+            "chat": ["POST /v1/chat/completions", "POST /chat/completions", "POST /openai/v1/chat/completions"],
+            "models": ["GET /v1/models", "GET /models"],
+            "cache": ["GET /v1/cache", "POST /v1/cache/clear"],
+        },
+        "notes": [
+            "No existe inferencia remota avanzada realmente ilimitada y gratis sin restricciones; los tiers gratuitos tienen cuotas/rate limits/créditos.",
+            "El gateway maximiza acceso con una API key simple, agregación de cuentas gratuitas en .env, fallback automático, caché y compresión de contexto.",
+        ],
+    }
+
+async def _models_response(_: bool = Depends(require_api_key_flexible)):
+    providers, models = await catalog()
+    data = [{
+        "id": m["id"], "object": "model", "created": 0, "owned_by": m["owned_by"],
+        "provider": m["provider"], "free": m.get("free", True), "capabilities": m.get("capabilities", []),
+        "note": m.get("note", ""),
+    } for m in models]
+    return {"object": "list", "providers": providers, "data": data}
+
+for path in ["/v1/models", "/models", "/openai/v1/models", "/api/v1/models"]:
+    app.add_api_route(path, _models_response, methods=["GET"], dependencies=[Depends(require_api_key_flexible)])
+
+async def _providers_response(_: bool = Depends(require_api_key_flexible)):
+    providers, _ = await catalog()
+    return {"object": "list", "data": providers}
+
+for path in ["/v1/providers", "/providers", "/openai/v1/providers", "/api/v1/providers"]:
+    app.add_api_route(path, _providers_response, methods=["GET"], dependencies=[Depends(require_api_key_flexible)])
+
+async def _cache_info(_: bool = Depends(require_api_key_flexible)):
+    return {"object": "cache", **response_cache.info()}
+
+async def _cache_clear(_: bool = Depends(require_api_key_flexible)):
+    n = response_cache.clear()
+    return {"object": "cache.clear", "cleared": n, **response_cache.info()}
+
+for path in ["/v1/cache", "/cache", "/openai/v1/cache", "/api/v1/cache"]:
+    app.add_api_route(path, _cache_info, methods=["GET"], dependencies=[Depends(require_api_key_flexible)])
+for path in ["/v1/cache/clear", "/cache/clear", "/openai/v1/cache/clear", "/api/v1/cache/clear"]:
+    app.add_api_route(path, _cache_clear, methods=["POST", "DELETE"], dependencies=[Depends(require_api_key_flexible)])
+
+def _apply_cache_headers(data: dict[str, Any], *, hit: bool, key: str | None = None) -> dict[str, Any]:
+    data.setdefault("gateway", {})
+    data["gateway"]["cache"] = {"hit": hit, "enabled": bool(getattr(settings, 'cache_enabled', True)), "ttl_seconds": int(getattr(settings, 'cache_ttl_seconds', 300))}
+    if key:
+        data["gateway"]["cache"]["key"] = key[:16]
+    return data
+
+async def _chat(request: Request, _: bool = Depends(require_api_key_flexible)):
+    try:
+        raw = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    payload = _normalize_payload(raw)
+    before_chars = 0
+    try:
+        before_chars = sum(len(str(m.get('content',''))) for m in (payload.get('messages') or []) if isinstance(m, dict))
+    except Exception:
+        pass
+    optimized = compress_messages(copy.deepcopy(payload))
+    payload_for_cache = copy.deepcopy(optimized)
+    key = cache_key(payload_for_cache) if cacheable(payload_for_cache) else None
+    if key:
+        cached = response_cache.get(key)
+        if cached:
+            cached.setdefault("gateway", {})
+            cached["gateway"].setdefault("context", {})
+            if optimized.get("gateway", {}).get("context_compressed"):
+                cached["gateway"]["context"] = {k: v for k, v in optimized["gateway"].items() if k.startswith('context') or k in ('messages_before','messages_after','mode')}
+            _apply_cache_headers(cached, hit=True, key=key)
+            return JSONResponse(cached)
+    stream = bool(optimized.get("stream"))
+    try:
+        if stream:
+            async def gen():
+                try:
+                    async for chunk in stream_with_fallback(optimized):
+                        yield chunk
+                except ProviderError as e:
+                    err = {"error": {"message": str(e), "type": "provider_error", "provider": e.provider, "code": e.status}}
+                    yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n".encode()
+                    yield b"data: [DONE]\n\n"
+            return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        data, _ = await execute_with_fallback(optimized)
+        data.setdefault("object", "chat.completion")
+        data.setdefault("created", int(time.time()))
+        data.setdefault("gateway", {})
+        if optimized.get("gateway", {}).get("context_compressed"):
+            data["gateway"]["context"] = {k: v for k, v in optimized["gateway"].items() if k.startswith('context') or k in ('messages_before','messages_after','mode')}
+        else:
+            data["gateway"]["context"] = {"context_compressed": False, "context_chars_before": before_chars}
+        _apply_cache_headers(data, hit=False, key=key)
+        if key and isinstance(data, dict) and data.get("choices"):
+            response_cache.set(key, data, int(getattr(settings, 'cache_ttl_seconds', 300)))
+        return JSONResponse(data)
+    except ProviderError as e:
+        raise HTTPException(status_code=e.status, detail={"message": str(e), "type": "provider_error", "provider": e.provider, "model": optimized.get("model"), "code": e.status})
+
+for path in [
+    "/v1/chat/completions", "/chat/completions", "/openai/v1/chat/completions", "/api/v1/chat/completions",
+    "/v1/completions", "/completions",
+]:
+    app.add_api_route(path, _chat, methods=["POST"], dependencies=[Depends(require_api_key_flexible)])
+
+@app.get("/v1")
+@app.get("/openai/v1")
+@app.get("/api/v1")
+async def v1_root(_: bool = Depends(require_api_key_flexible)):
+    return {"object": "api", "name": "Free AI Gateway", "openai_compatible": True, "endpoints": ["/v1/models", "/v1/chat/completions", "/v1/cache"]}
