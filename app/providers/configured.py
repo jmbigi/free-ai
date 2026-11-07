@@ -26,6 +26,32 @@ class OpenRouterProvider(_S):
     extra_headers = {"HTTP-Referer": "http://localhost:8000", "X-Title": "Free AI Gateway"}
     @property
     def api_key(self): return settings.openrouter_api_key
+
+    async def list_models(self):
+        base = await super().list_models()
+        seen = {m.upstream_model for m in base}
+        if not self.available():
+            return base
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get(f"{self.base_url}/models", headers=self._headers())
+                if r.status_code == 200:
+                    for m in (r.json().get('data') or []):
+                        mid = (m.get('id') or '').strip()
+                        if not mid or ':free' not in mid or mid in seen:
+                            continue
+                        seen.add(mid)
+                        caps = ['chat']
+                        name = (m.get('name') or mid).lower()
+                        if 'coder' in name or 'code' in name or 'tool' in str(m.get('supported_parameters') or []):
+                            caps.append('tools')
+                        from .base import ModelInfo
+                        base.append(ModelInfo(id=f"{self.id}/{mid}", provider=self.id, owned_by=(m.get('owned_by') or self.id), upstream_model=mid, capabilities=caps, note='OpenRouter :free discovered from /models (quota/rate limits/capacity vary).'))
+        except Exception:
+            pass
+        return base
+
     default_models = [
         ("openrouter/free", "openrouter/free", ["chat"], "Routes to available eligible free models; availability/rate limits vary."),
         ("meta-llama/llama-3.3-70b-instruct:free", "meta-llama/llama-3.3-70b-instruct:free", ["chat","tools"], "Free variant when available."),
