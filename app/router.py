@@ -4,9 +4,10 @@ import time
 from typing import Any, AsyncIterator
 from .providers.pollinations import PollinationsProvider
 from .providers.configured import (
+    LLM7Provider,
     GroqProvider, OpenRouterProvider, NvidiaProvider, MistralProvider,
     SambaNovaProvider, CerebrasProvider, HuggingFaceProvider, TogetherProvider, CohereProvider,
-    DeepSeekProvider, MoonshotProvider, OpenCodeProvider, GenericOpenAIProvider,
+    DeepSeekProvider, MoonshotProvider, OpenCodeProvider, LLM7Provider, GenericOpenAIProvider,
 )
 from .providers.gemini import GeminiProvider
 from .providers.cloudflare import CloudflareProvider
@@ -32,7 +33,7 @@ def _instances():
             PollinationsProvider(),
             OpenRouterProvider(), GroqProvider(), NvidiaProvider(), GeminiProvider(), CloudflareProvider(),
             MistralProvider(), SambaNovaProvider(), CerebrasProvider(), HuggingFaceProvider(),
-            TogetherProvider(), CohereProvider(), DeepSeekProvider(), MoonshotProvider(), OpenCodeProvider(), GenericOpenAIProvider(),
+            TogetherProvider(), CohereProvider(), DeepSeekProvider(), MoonshotProvider(), OpenCodeProvider(), LLM7Provider(), GenericOpenAIProvider(),
         ]
     return _INSTANCES
 
@@ -61,6 +62,7 @@ AUTO_CANDIDATES = [
     ("openrouter", "google/gemma-3-27b-it:free", "OpenRouter :free"),
     ("openrouter", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", "OpenRouter :free"),
     ("openrouter", "liquid/lfm-2.5-2.6b:free", "OpenRouter :free"),
+    ("llm7", "default", "LLM7 key-optional (best-effort)"),
 ]
 
 

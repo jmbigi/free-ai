@@ -162,3 +162,23 @@ class GenericOpenAIProvider(_S):
     default_models = [
         ("default", "gpt-4o-mini", ["chat"], "Pass a concrete model id as openai-compatible/<model> when using a custom upstream."),
     ]
+
+
+class LLM7Provider(_S):
+    """LLM7.io - key optional (best-effort). Free availability/rate limits/model rotation vary; verify before relying."""
+    id = "llm7"; label = "LLM7 (key opcional; disponibilidad free varía)"
+    @property
+    def base_url(self): return getattr(settings,'llm7_base_url',None) or 'https://api.llm7.io/v1'
+    @property
+    def api_key(self): return getattr(settings,'llm7_api_key','') or 'unused'
+    def available(self): return True  # key optional; actual availability verified per request
+    default_models = [
+        ("default", "default", ["chat"], "LLM7 default route; availability/rate limits vary."),
+    ]
+    async def list_models(self):
+        # try discover; keep conservative
+        try:
+            base = await super().list_models()
+            if base: return base
+        except Exception: pass
+        return [__import__('app.providers.base',fromlist=['ModelInfo']).ModelInfo(id=f"{self.id}/default", provider=self.id, owned_by=self.id, upstream_model="default", capabilities=["chat"], note="LLM7 key-optional endpoint; model availability/rate limits may vary.")]

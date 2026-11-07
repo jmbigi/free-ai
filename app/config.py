@@ -230,5 +230,13 @@ class SettingsProxy:
     def brave_search_api_key(self) -> str: return _read_env('BRAVE_SEARCH_API_KEY','') or _read_env('BRAVE_API_KEY','')
     @property
     def searxng_base_url(self) -> str: return _read_env('SEARXNG_BASE_URL','')
+    @property
+    def llm7_base_url(self) -> str:
+        return _read_env("LLM7_BASE_URL", "https://api.llm7.io/v1").rstrip('/')
+
+    @property
+    def llm7_api_key(self) -> str:
+        return _read_env("LLM7_API_KEY", "")
+
 
 settings = SettingsProxy()
