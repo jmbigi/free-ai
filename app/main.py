@@ -11,7 +11,7 @@ from .cache import cache_key, cacheable, response_cache
 from .config import settings
 from .context import compress_messages
 from .providers.base import ProviderError
-from .router import catalog, execute_with_fallback, stream_with_fallback, runtime_status
+from .router import catalog, execute_with_fallback, stream_with_fallback, runtime_status, free_control_info
 
 app = FastAPI(
     title="Free AI Gateway",
@@ -137,6 +137,30 @@ async def health():
 
 
 
+
+
+async def _free_response(_: bool = Depends(require_api_key_flexible)):
+    providers, models = await catalog()
+    ctrl = free_control_info()
+    def is_free_id(m):
+        mid = (m.get('id') or '').lower(); up = (m.get('upstream_model') or '').lower(); prov=(m.get('provider') or '').lower()
+        return prov=='pollinations' or ':free' in mid or ':free' in up or mid.endswith('/free') or (prov=='openrouter' and up=='free')
+    free_models = [m for m in models if m.get('id')!='auto' and is_free_id(m)]
+    return {
+        'object':'free_control','status':'ok','time':int(time.time()),
+        'free_control': ctrl,
+        'summary': {
+            'total_models_listed': len(models),
+            'clearly_free_models_listed': len(free_models),
+            'active_providers': [p['id'] for p in providers if p.get('active')],
+            'note': 'Listado "claramente gratuito" usa señales explícitas (:free/anónimo). Proveedores con cuenta propia pueden tener cuotas/créditos; el control FREE_ONLY bloquea candidatos no marcados como free-tier.',
+        },
+        'clearly_free_models': [{'id':m['id'],'provider':m['provider'],'note':m.get('note','')} for m in free_models[:300]],
+    }
+
+for path in ['/v1/free','/free','/openai/v1/free','/api/v1/free']:
+    app.add_api_route(path, _free_response, methods=['GET'], dependencies=[Depends(require_api_key_flexible)])
+
 async def _status_response(_: bool = Depends(require_api_key_flexible)):
     providers, models = await catalog()
     active = [p["id"] for p in providers if p.get("active")]
@@ -157,6 +181,7 @@ async def _status_response(_: bool = Depends(require_api_key_flexible)):
         "models_count": len(models),
         "cache": response_cache.info(),
         "runtime": rt,
+        "free_control": free_control_info(),
         "auth_modes": ["Authorization: Bearer <key>", "api-key", "x-api-key", "key", "?api_key/?key"],
         "compatibility": {"base_urls": ["/v1","/openai/v1","/api/v1"], "inputs": ["messages","prompt","input"], "token_limits": ["max_tokens","max_completion_tokens"], "model": "auto recommended"},
     }

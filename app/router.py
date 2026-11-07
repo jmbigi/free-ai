@@ -11,6 +11,7 @@ from .providers.configured import (
 from .providers.gemini import GeminiProvider
 from .providers.cloudflare import CloudflareProvider
 from .providers.base import ModelInfo, ProviderError
+from .config import settings
 
 # mid -> unix cooldown-until
 _COOLDOWN: dict[str, float] = {}
@@ -68,7 +69,7 @@ def _record(pid: str, *, ok: bool, ms: int | None = None, error: str = ""):
 def runtime_status() -> dict[str, Any]:
     now = time.time()
     cds = {k: round(v - now, 1) for k, v in _COOLDOWN.items() if v > now}
-    return {"cooldowns": cds, "stats": _STATS, "auto_candidates": len(AUTO_CANDIDATES)}
+    return {"cooldowns": cds, "stats": _STATS, "auto_candidates": len(AUTO_CANDIDATES), "free_control": _free_control_info()}
 
 
 async def catalog() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -192,8 +193,44 @@ def _clamp_attempts(payload: dict[str, Any]) -> int:
     return 10
 
 
+def _is_free_model(model: ModelInfo | dict[str, Any]) -> bool:
+    d = model.__dict__ if isinstance(model, ModelInfo) else (model if isinstance(model, dict) else {})
+    mid = str(d.get('id') or '').lower()
+    up = str(d.get('upstream_model') or '').lower()
+    provider = str(d.get('provider') or '').lower()
+    # Explicit block if user asked to allow paid and this is obviously paid? no: free_only controls access.
+    # Clear free signals
+    if provider == 'pollinations':
+        return True
+    if ':free' in mid or ':free' in up or mid.endswith('/free') or up == 'free' or 'openrouter/free' in mid:
+        return True
+    if 'free' in mid.split('/')[-1] and provider == 'openrouter':
+        return True
+    # Anonymous/public endpoints configured as free-tier in this gateway
+    if provider in ('opencode',) and not getattr(settings, 'opencode_api_key', ''):
+        # Public OpenCode access may be restricted; treat as free-attempt but not guaranteed.
+        return True
+    # Provider has upstream key: we cannot cryptographically prove upstream account is free-only.
+    # In FREE_ONLY mode we only allow providers/models explicitly marked as free-tier candidates unless user opts in.
+    if getattr(settings, 'free_only', True) and not getattr(settings, 'allow_paid_models', False):
+        # allow only known free-tier patterns/candidates
+        return False
+    # paid-allowed mode still warns via metadata; caller decides
+    return bool(d.get('free', False))
+
+
+def _free_control_info() -> dict[str, Any]:
+    return {
+        'free_only': bool(getattr(settings, 'free_only', True)),
+        'allow_paid_models': bool(getattr(settings, 'allow_paid_models', False)),
+        'verify_free_tier': bool(getattr(settings, 'verify_free_tier', True)),
+        'block_unknown_paid': bool(getattr(settings, 'block_unknown_paid', True)),
+        'policy': 'Solo enruta a fuentes gratuitas/anónimas o candidatos free-tier explícitos (:free, Pollinations). Proveedores con API key propia pueden tener créditos/cuotas; no se garantiza gratuidad ilimitada upstream.',
+        'limitation': 'No existe verificación criptográfica universal de que una cuenta upstream sea 100% gratuita; el gateway aplica control por política, allowlist free-tier y metadatos.',
+    }
+
+
 def _build_auto_plan(*, exclude: set[str], max_items: int) -> list[tuple[Any, ModelInfo]]:
-    plan: list[tuple[Any, ModelInfo]] = []
     scored = []
     for pid, upstream, label in AUTO_CANDIDATES:
         p = get_provider(pid)
@@ -202,16 +239,16 @@ def _build_auto_plan(*, exclude: set[str], max_items: int) -> list[tuple[Any, Mo
         mid = f"{pid}/{upstream}"
         if mid in exclude:
             continue
+        m = ModelInfo(id=mid, provider=pid, owned_by=pid, upstream_model=upstream, capabilities=["chat"], note=label, free=_is_free_model({'id':mid,'provider':pid,'upstream_model':upstream}))
+        if getattr(settings, 'free_only', True) and getattr(settings, 'block_unknown_paid', True) and not _is_free_model(m):
+            continue
         left = _cooldown_left(mid)
-        # prefer non-cooldown and historically healthier providers
         st = _stat(pid)
         health = st["ok"] - st["fail"] * 0.5
         score = (1 if left > 0 else 0, left, -health)
-        scored.append((score, p, ModelInfo(id=mid, provider=pid, owned_by=pid, upstream_model=upstream, capabilities=["chat"], note=label), mid))
+        scored.append((score, p, m, mid))
     scored.sort(key=lambda x: x[0])
-    for _, p, m, mid in scored[:max_items]:
-        plan.append((p, m))
-    return plan
+    return [(p, m) for _, p, m, _ in scored[:max_items]]
 
 
 async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -232,6 +269,8 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
             data["gateway"]["fallback_used"] = requested != model.id and (requested != 'auto' or len(attempts) > 1)
             data["gateway"]["selected"] = model.id
             data["requested_model"] = requested
+            data["gateway"]["free_control"] = _free_control_info()
+            data["gateway"]["selected_is_free_tier"] = _is_free_model(model)
             return data
         except Exception as e:
             ms = int((time.time() - t0) * 1000)
@@ -243,6 +282,11 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
 
     if requested != "auto":
         provider, model = await resolve_model(requested)
+        if getattr(settings, 'free_only', True) and getattr(settings, 'block_unknown_paid', True) and not _is_free_model(model):
+            raise ProviderError(
+                f"Modelo bloqueado por política FREE_ONLY: {model.id}. Usa un modelo :free/anónimo o configura FREE_ONLY=0/ALLOW_PAID_MODELS=1 bajo tu responsabilidad.",
+                status=403, provider="gateway",
+            )
         tried.add(model.id)
         data = await try_one(provider, model)
         if data:
@@ -303,3 +347,7 @@ async def stream_with_fallback(payload: dict[str, Any]) -> AsyncIterator[bytes]:
             _record(p.id, ok=False, ms=int((time.time() - t0) * 1000), error=err)
             continue
     raise ProviderError("Streaming fallback agotado: " + " | ".join(errors[-4:]), status=502, provider="gateway")
+
+
+def free_control_info() -> dict[str, Any]:
+    return _free_control_info()

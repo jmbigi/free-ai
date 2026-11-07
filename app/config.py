@@ -1,119 +1,212 @@
 from __future__ import annotations
 import os
-from dataclasses import dataclass
 from pathlib import Path
-from dotenv import load_dotenv, dotenv_values
+from dotenv import dotenv_values, load_dotenv
 
-_env = Path(__file__).resolve().parents[1] / ".env"
+BASE_DIR = Path(__file__).resolve().parents[1]
+ENV_FILE = BASE_DIR / ".env"
+load_dotenv(ENV_FILE, override=False)
 
-def _load_env() -> None:
-    load_dotenv(_env, override=False)
-    load_dotenv(override=False)
 
-_load_env()
-
-def _all_values() -> dict[str, str]:
-    vals = {}
+def _read_env(name: str, default: str = "") -> str:
+    v = os.getenv(name)
+    if v is not None and str(v).strip() != "":
+        return str(v).strip()
     try:
-        vals.update({k: v for k, v in dotenv_values(_env).items() if v is not None})
+        data = dotenv_values(ENV_FILE)
+        for k in (name, name.upper(), name.lower()):
+            if k in data and data[k] is not None and str(data[k]).strip() != "":
+                return str(data[k]).strip()
+        # alias map for common key names
+        aliases = {
+            'HUGGINGFACE_API_KEY': ['HUGGING_FACE_API_KEY', 'HF_API_KEY', 'HF_TOKEN'],
+            'HUGGING_FACE_API_KEY': ['HUGGINGFACE_API_KEY', 'HF_API_KEY', 'HF_TOKEN'],
+            'GROQ_API_KEY': ['GROQ_KEY'],
+            'OPENROUTER_API_KEY': ['OPENROUTER_KEY'],
+            'GEMINI_API_KEY': ['GOOGLE_API_KEY', 'GOOGLE_AI_STUDIO_KEY'],
+            'MOONSHOT_API_KEY': ['KIMI_API_KEY', 'KIMI_K2_API_KEY', 'MOONSHOT_KEY'],
+            'KIMI_API_KEY': ['MOONSHOT_API_KEY', 'KIMI_K2_API_KEY'],
+            'DEEPSEEK_API_KEY': ['DEEPSEEK_KEY'],
+            'OPENCODE_API_KEY': ['OPENCODE_KEY'],
+            'CUSTOM_OPENAI_API_KEY': ['OPENAI_COMPATIBLE_API_KEY', 'GENERIC_OPENAI_API_KEY'],
+            'CUSTOM_OPENAI_BASE_URL': ['OPENAI_COMPATIBLE_BASE_URL', 'GENERIC_OPENAI_BASE_URL'],
+            'CUSTOM_OPENAI_MODELS': ['OPENAI_COMPATIBLE_MODELS', 'GENERIC_OPENAI_MODELS'],
+        }
+        for alias in aliases.get(name, []):
+            for k in (alias, alias.upper(), alias.lower()):
+                if k in data and data[k] is not None and str(data[k]).strip() != "":
+                    return str(data[k]).strip()
     except Exception:
         pass
-    vals.update({k: v for k, v in os.environ.items()})
-    return vals
+    return default
 
-def _get(*names: str) -> str:
-    vals = _all_values()
-    for n in names:
-        v = vals.get(n)
-        if v is not None and str(v).strip():
-            return str(v).strip().strip("'\"")
-    return ""
 
-def _get_bool(name: str, default: bool) -> bool:
-    v = _get(name)
-    if not v:
-        return default
-    return v.lower() in ('1','true','yes','on','y')
+def _read_bool(name: str, default: bool) -> bool:
+    raw = _read_env(name, "1" if default else "0").lower()
+    return raw in ("1", "true", "yes", "on")
 
-def _get_int(name: str, default: int) -> int:
-    v = _get(name)
+
+def _read_int(name: str, default: int) -> int:
     try:
-        return int(v) if v else default
+        return int(float(_read_env(name, str(default))))
     except Exception:
         return default
 
-@dataclass
-class SettingsData:
-    api_key: str = ""
-    groq_api_key: str = ""
-    openrouter_api_key: str = ""
-    gemini_api_key: str = ""
-    cloudflare_account_id: str = ""
-    cloudflare_api_token: str = ""
-    nvidia_api_key: str = ""
-    mistral_api_key: str = ""
-    huggingface_api_key: str = ""
-    together_api_key: str = ""
-    sambanova_api_key: str = ""
-    cohere_api_key: str = ""
-    cerebras_api_key: str = ""
-    deepseek_api_key: str = ""
-    moonshot_api_key: str = ""
-    kimi_api_key: str = ""
-    opencode_api_key: str = ""
-    opencode_base_url: str = ""
-    openai_compatible_base_url: str = ""
-    openai_compatible_api_key: str = ""
-    host: str = "0.0.0.0"
-    port: int = 8000
-    cache_enabled: bool = True
-    cache_ttl_seconds: int = 300
-    cache_max_items: int = 512
-    context_compress_enabled: bool = True
-    context_max_chars: int = 120000
-    context_keep_last_messages: int = 12
-    context_message_max_chars: int = 12000
-    context_summary_max_chars: int = 4000
 
-def load_settings() -> SettingsData:
-    _load_env()
-    return SettingsData(
-        api_key=_get("API_KEY"),
-        groq_api_key=_get("GROQ_API_KEY"),
-        openrouter_api_key=_get("OPENROUTER_API_KEY"),
-        gemini_api_key=_get("GEMINI_API_KEY","GOOGLE_API_KEY"),
-        cloudflare_account_id=_get("CLOUDFLARE_ACCOUNT_ID"),
-        cloudflare_api_token=_get("CLOUDFLARE_API_TOKEN","CLOUDFLARE_API_KEY"),
-        nvidia_api_key=_get("NVIDIA_API_KEY","NIM_API_KEY"),
-        mistral_api_key=_get("MISTRAL_API_KEY"),
-        huggingface_api_key=_get("HUGGINGFACE_API_KEY","HUGGING_FACE_API_KEY","HF_TOKEN","HF_API_KEY"),
-        together_api_key=_get("TOGETHER_API_KEY"),
-        sambanova_api_key=_get("SAMBANOVA_API_KEY"),
-        cohere_api_key=_get("COHERE_API_KEY"),
-        cerebras_api_key=_get("CEREBRAS_API_KEY"),
-        deepseek_api_key=_get("DEEPSEEK_API_KEY"),
-        moonshot_api_key=_get("MOONSHOT_API_KEY","KIMI_API_KEY"),
-        kimi_api_key=_get("KIMI_API_KEY","MOONSHOT_API_KEY"),
-        opencode_api_key=_get("OPENCODE_API_KEY","OPENCODE_ZEN_API_KEY"),
-        opencode_base_url=_get("OPENCODE_BASE_URL") or "https://opencode.ai/inference/openai/v1",
-        openai_compatible_base_url=_get("OPENAI_COMPATIBLE_BASE_URL","CUSTOM_OPENAI_BASE_URL"),
-        openai_compatible_api_key=_get("OPENAI_COMPATIBLE_API_KEY","CUSTOM_OPENAI_API_KEY"),
-        host=_get("HOST") or "0.0.0.0",
-        port=_get_int("PORT", 8000),
-        cache_enabled=_get_bool("CACHE_ENABLED", True),
-        cache_ttl_seconds=max(5, _get_int("CACHE_TTL_SECONDS", 300)),
-        cache_max_items=max(16, _get_int("CACHE_MAX_ITEMS", 512)),
-        context_compress_enabled=_get_bool("CONTEXT_COMPRESS_ENABLED", True),
-        context_max_chars=max(4000, _get_int("CONTEXT_MAX_CHARS", 120000)),
-        context_keep_last_messages=max(2, _get_int("CONTEXT_KEEP_LAST_MESSAGES", 12)),
-        context_message_max_chars=max(1000, _get_int("CONTEXT_MESSAGE_MAX_CHARS", 12000)),
-        context_summary_max_chars=max(500, _get_int("CONTEXT_SUMMARY_MAX_CHARS", 4000)),
-    )
+class SettingsProxy:
+    @property
+    def api_key(self) -> str:
+        return _read_env("API_KEY", "")
 
-class _SettingsProxy:
-    def __getattr__(self, name: str):
-        return getattr(load_settings(), name)
-    def reload(self):
-        return load_settings()
+    @property
+    def host(self) -> str:
+        return _read_env("HOST", "0.0.0.0")
 
-settings = _SettingsProxy()
+    @property
+    def port(self) -> int:
+        return _read_int("PORT", 8000)
+
+    @property
+    def request_timeout(self) -> int:
+        return _read_int("REQUEST_TIMEOUT", 120)
+
+    @property
+    def app_name(self) -> str:
+        return _read_env("APP_NAME", "Free AI Gateway")
+
+    # Free-only controls: gateway must only route to free-tier/anonymous/configured-free sources.
+    @property
+    def free_only(self) -> bool:
+        return _read_bool("FREE_ONLY", True)
+
+    @property
+    def allow_paid_models(self) -> bool:
+        # Explicit opt-in required; default false. Even then, upstream billing/terms apply.
+        return _read_bool("ALLOW_PAID_MODELS", False)
+
+    @property
+    def verify_free_tier(self) -> bool:
+        return _read_bool("VERIFY_FREE_TIER", True)
+
+    @property
+    def block_unknown_paid(self) -> bool:
+        # When free_only, block models/providers not clearly identified as free/anonymous/free-tier.
+        return _read_bool("BLOCK_UNKNOWN_PAID", True)
+
+    # Cache controls (prompt/response cache)
+    @property
+    def cache_enabled(self) -> bool:
+        return _read_bool("CACHE_ENABLED", True)
+
+    @property
+    def cache_ttl_seconds(self) -> int:
+        return max(10, _read_int("CACHE_TTL_SECONDS", 300))
+
+    @property
+    def cache_max_entries(self) -> int:
+        return max(50, _read_int("CACHE_MAX_ENTRIES", 1000))
+
+    @property
+    def cache_max_prompt_chars(self) -> int:
+        return max(500, _read_int("CACHE_MAX_PROMPT_CHARS", 24000))
+
+    # Context compression controls
+    @property
+    def context_compress_enabled(self) -> bool:
+        return _read_bool("CONTEXT_COMPRESS_ENABLED", True)
+
+    @property
+    def context_max_chars(self) -> int:
+        return max(2000, _read_int("CONTEXT_MAX_CHARS", 120000))
+
+    @property
+    def context_keep_last_messages(self) -> int:
+        return max(2, _read_int("CONTEXT_KEEP_LAST_MESSAGES", 12))
+
+    @property
+    def context_message_max_chars(self) -> int:
+        return max(500, _read_int("CONTEXT_MESSAGE_MAX_CHARS", 12000))
+
+    # Optional upstream API keys
+    @property
+    def groq_api_key(self) -> str:
+        return _read_env("GROQ_API_KEY", "")
+
+    @property
+    def openrouter_api_key(self) -> str:
+        return _read_env("OPENROUTER_API_KEY", "")
+
+    @property
+    def nvidia_api_key(self) -> str:
+        return _read_env("NVIDIA_API_KEY", "")
+
+    @property
+    def gemini_api_key(self) -> str:
+        return _read_env("GEMINI_API_KEY", "")
+
+    @property
+    def cloudflare_api_token(self) -> str:
+        return _read_env("CLOUDFLARE_API_TOKEN", "")
+
+    @property
+    def cloudflare_account_id(self) -> str:
+        return _read_env("CLOUDFLARE_ACCOUNT_ID", "")
+
+    @property
+    def mistral_api_key(self) -> str:
+        return _read_env("MISTRAL_API_KEY", "")
+
+    @property
+    def sambanova_api_key(self) -> str:
+        return _read_env("SAMBANOVA_API_KEY", "")
+
+    @property
+    def cerebras_api_key(self) -> str:
+        return _read_env("CEREBRAS_API_KEY", "")
+
+    @property
+    def huggingface_api_key(self) -> str:
+        return _read_env("HUGGINGFACE_API_KEY", "") or _read_env("HUGGING_FACE_API_KEY", "")
+
+    @property
+    def together_api_key(self) -> str:
+        return _read_env("TOGETHER_API_KEY", "")
+
+    @property
+    def cohere_api_key(self) -> str:
+        return _read_env("COHERE_API_KEY", "")
+
+    @property
+    def deepseek_api_key(self) -> str:
+        return _read_env("DEEPSEEK_API_KEY", "")
+
+    @property
+    def moonshot_api_key(self) -> str:
+        return _read_env("MOONSHOT_API_KEY", "") or _read_env("KIMI_API_KEY", "")
+
+    @property
+    def kimi_api_key(self) -> str:
+        return self.moonshot_api_key
+
+    @property
+    def opencode_api_key(self) -> str:
+        return _read_env("OPENCODE_API_KEY", "")
+
+    @property
+    def opencode_base_url(self) -> str:
+        return _read_env("OPENCODE_BASE_URL", "")
+
+    @property
+    def custom_openai_api_key(self) -> str:
+        return _read_env("CUSTOM_OPENAI_API_KEY", "")
+
+    @property
+    def custom_openai_base_url(self) -> str:
+        return _read_env("CUSTOM_OPENAI_BASE_URL", "")
+
+    @property
+    def custom_openai_models(self) -> str:
+        return _read_env("CUSTOM_OPENAI_MODELS", "")
+
+
+settings = SettingsProxy()
