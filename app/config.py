@@ -57,6 +57,13 @@ class SettingsData:
     sambanova_api_key: str = ""
     cohere_api_key: str = ""
     cerebras_api_key: str = ""
+    deepseek_api_key: str = ""
+    moonshot_api_key: str = ""
+    kimi_api_key: str = ""
+    opencode_api_key: str = ""
+    opencode_base_url: str = ""
+    openai_compatible_base_url: str = ""
+    openai_compatible_api_key: str = ""
     host: str = "0.0.0.0"
     port: int = 8000
     cache_enabled: bool = True
@@ -84,6 +91,13 @@ def load_settings() -> SettingsData:
         sambanova_api_key=_get("SAMBANOVA_API_KEY"),
         cohere_api_key=_get("COHERE_API_KEY"),
         cerebras_api_key=_get("CEREBRAS_API_KEY"),
+        deepseek_api_key=_get("DEEPSEEK_API_KEY"),
+        moonshot_api_key=_get("MOONSHOT_API_KEY","KIMI_API_KEY"),
+        kimi_api_key=_get("KIMI_API_KEY","MOONSHOT_API_KEY"),
+        opencode_api_key=_get("OPENCODE_API_KEY","OPENCODE_ZEN_API_KEY"),
+        opencode_base_url=_get("OPENCODE_BASE_URL") or "https://opencode.ai/inference/openai/v1",
+        openai_compatible_base_url=_get("OPENAI_COMPATIBLE_BASE_URL","CUSTOM_OPENAI_BASE_URL"),
+        openai_compatible_api_key=_get("OPENAI_COMPATIBLE_API_KEY","CUSTOM_OPENAI_API_KEY"),
         host=_get("HOST") or "0.0.0.0",
         port=_get_int("PORT", 8000),
         cache_enabled=_get_bool("CACHE_ENABLED", True),

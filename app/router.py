@@ -4,6 +4,7 @@ from .providers.pollinations import PollinationsProvider
 from .providers.configured import (
     GroqProvider, OpenRouterProvider, NvidiaProvider, MistralProvider,
     SambaNovaProvider, CerebrasProvider, HuggingFaceProvider, TogetherProvider, CohereProvider,
+    DeepSeekProvider, MoonshotProvider, OpenCodeProvider, GenericOpenAIProvider,
 )
 from .providers.gemini import GeminiProvider
 from .providers.cloudflare import CloudflareProvider
@@ -12,9 +13,9 @@ from .providers.base import ModelInfo, ProviderError
 def _instances():
     return [
         PollinationsProvider(),
-        GroqProvider(), OpenRouterProvider(), GeminiProvider(), CloudflareProvider(),
-        NvidiaProvider(), MistralProvider(), SambaNovaProvider(), CerebrasProvider(),
-        HuggingFaceProvider(), TogetherProvider(), CohereProvider(),
+        OpenRouterProvider(), GroqProvider(), NvidiaProvider(), GeminiProvider(), CloudflareProvider(),
+        MistralProvider(), SambaNovaProvider(), CerebrasProvider(), HuggingFaceProvider(),
+        TogetherProvider(), CohereProvider(), DeepSeekProvider(), MoonshotProvider(), OpenCodeProvider(), GenericOpenAIProvider(),
     ]
 
 AUTO_CANDIDATES = [
@@ -33,6 +34,9 @@ AUTO_CANDIDATES = [
     ("mistral", "mistral-small-latest", "Mistral"),
     ("sambanova", "Meta-Llama-3.3-70B-Instruct", "SambaNova"),
     ("cerebras", "llama-3.3-70b", "Cerebras"),
+    ("deepseek", "deepseek-flash", "DeepSeek official"),
+    ("moonshot", "kimi-k3.1-pro", "Moonshot/Kimi"),
+    ("opencode", "big-pickle", "OpenCode"),
 ]
 
 async def catalog() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -50,7 +54,7 @@ async def catalog() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
                 if not any(x.id == m.id for x in models):
                     models.append(m)
     auto = ModelInfo(id="auto", provider="gateway", owned_by="gateway", upstream_model="auto",
-                     capabilities=["chat","fallback"], note="Fallback automático entre proveedores/cuentas gratuitos disponibles.")
+                     capabilities=["chat","fallback"], note="Fallback automático entre proveedores/cuentas configurados y gratuitos disponibles.")
     return providers, [auto.__dict__] + [m.__dict__ for m in models]
 
 def get_provider(pid: str):
@@ -89,7 +93,7 @@ async def resolve_model(model_id: str) -> tuple[Any, ModelInfo]:
 
 def _retryable(exc: Exception) -> bool:
     msg = str(exc).lower()
-    return any(s in msg for s in ['429','rate limit','quota','402','payment','credit','insufficient','timeout','503','502','504','unavailable','busy','budget','not supported','model_not_supported','no endpoints','403','temporarily'])
+    return any(s in msg for s in ['429','rate limit','quota','402','payment','credit','insufficient','timeout','503','502','504','unavailable','busy','budget','not supported','model_not_supported','no endpoints','403','temporarily','overloaded'])
 
 async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     attempts: list[dict[str, Any]] = []
@@ -128,7 +132,7 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
         except Exception as e:
             attempts.append({"provider": pid, "model": mid, "ok": False, "error": str(e)[:350]})
             continue
-    detail = " | ".join(a["provider"]+"/"+a["model"].split('/',1)[-1]+": "+a["error"] for a in attempts[-5:]) or "Sin proveedores disponibles"
+    detail = " | ".join(a["provider"]+"/"+a["model"].split('/',1)[-1]+": "+a["error"] for a in attempts[-6:]) or "Sin proveedores disponibles"
     raise ProviderError(f"Todos los proveedores/cuentas disponibles fallaron o están limitados. Intentos: {detail}", status=502, provider="gateway")
 
 async def stream_with_fallback(payload: dict[str, Any]):
@@ -156,4 +160,4 @@ async def stream_with_fallback(payload: dict[str, Any]):
             if not _retryable(e) and requested != 'auto':
                 raise
             continue
-    raise ProviderError("Streaming fallback agotado: " + " | ".join(errors[-3:]), status=502, provider="gateway")
+    raise ProviderError("Streaming fallback agotado: " + " | ".join(errors[-4:]), status=502, provider="gateway")
