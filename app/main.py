@@ -11,7 +11,7 @@ from .cache import cache_key, cacheable, response_cache
 from .config import settings
 from .context import compress_messages
 from .providers.base import ProviderError
-from .router import catalog, execute_with_fallback, stream_with_fallback
+from .router import catalog, execute_with_fallback, stream_with_fallback, runtime_status
 
 app = FastAPI(
     title="Free AI Gateway",
@@ -134,6 +134,35 @@ async def health():
             "El gateway maximiza acceso con una API key simple, agregación de cuentas gratuitas en .env, fallback automático, caché y compresión de contexto.",
         ],
     }
+
+
+
+async def _status_response(_: bool = Depends(require_api_key_flexible)):
+    providers, models = await catalog()
+    active = [p["id"] for p in providers if p.get("active")]
+    rt = runtime_status()
+    return {
+        "object": "status",
+        "status": "ok",
+        "time": int(time.time()),
+        "version": app.version,
+        "service": "free-ai-gateway",
+        "public_access": {
+            "direct_base_url": "http://109.123.248.91:8000/v1",
+            "recommended": "Use HTTPS reverse proxy (deploy/apache-free-ai-gateway.conf + DNS + certbot).",
+            "limitation": "Port 8000 may be blocked by provider/VPS firewall; free upstream tiers have quotas/rate limits/credits.",
+        },
+        "active_providers": active,
+        "providers": providers,
+        "models_count": len(models),
+        "cache": response_cache.info(),
+        "runtime": rt,
+        "auth_modes": ["Authorization: Bearer <key>", "api-key", "x-api-key", "key", "?api_key/?key"],
+        "compatibility": {"base_urls": ["/v1","/openai/v1","/api/v1"], "inputs": ["messages","prompt","input"], "token_limits": ["max_tokens","max_completion_tokens"], "model": "auto recommended"},
+    }
+
+for path in ["/v1/status", "/status", "/openai/v1/status", "/api/v1/status"]:
+    app.add_api_route(path, _status_response, methods=["GET"], dependencies=[Depends(require_api_key_flexible)])
 
 async def _models_response(_: bool = Depends(require_api_key_flexible)):
     providers, models = await catalog()
