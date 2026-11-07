@@ -60,3 +60,43 @@ print(r.choices[0].message.content)
 - No expongas `.env` ni claves upstream.
 - Prefiere HTTPS.
 - Si dejas 8000 abierto, considera limitar por firewall a IPs conocidas (requiere acceso admin del proveedor/firewall).
+
+
+## Conexión desde Kimi / Moonshot / clientes OpenAI-compatible
+Este gateway expone una API **OpenAI-compatible** con **una sola API key del gateway** (`API_KEY` en `.env` del servidor). No uses claves upstream.
+
+### Caso 1 — Usar este gateway como endpoint en un cliente compatible (recomendado)
+Configura el cliente/harness para apuntar a tu gateway:
+- **Base URL:** `http://109.123.248.91:8000/v1` (directo; sujeto a firewall del proveedor) o `https://ai.TU_DOMINIO/v1` (HTTPS recomendado).
+- **API Key:** `TU_API_KEY_GATEWAY` (valor de `API_KEY` del gateway).
+- **Model:** `auto` (recomendado: fallback + caché + control `FREE_ONLY`).
+
+Ejemplo `curl`:
+```bash
+curl https://ai.TU_DOMINIO/v1/chat/completions   -H "Authorization: Bearer TU_API_KEY_GATEWAY"   -H "Content-Type: application/json"   -d '{"model":"auto","messages":[{"role":"user","content":"Hola desde Kimi/client"}]}'
+```
+
+Ejemplo Python OpenAI SDK:
+```python
+from openai import OpenAI
+client = OpenAI(base_url="https://ai.TU_DOMINIO/v1", api_key="TU_API_KEY_GATEWAY")
+resp = client.chat.completions.create(
+    model="auto",
+    messages=[{"role":"user","content":"Hola"}],
+)
+print(resp.choices[0].message.content)
+```
+
+### Caso 2 — “Conectarme desde Kimi” para que Kimi sea el proveedor upstream
+Si lo que quieres es que **Kimi/Moonshot** responda *a través de este gateway*, agrega una clave/configuración upstream válida de Moonshot/Kimi en `.env` del servidor (`MOONSHOT_API_KEY` o alias soportado por `app/config.py`) y reinicia:
+```bash
+systemctl --user restart free-ai-gateway.service
+```
+Luego consulta modelos/proveedores con `GET /v1/providers` y `GET /v1/models` (autenticado). **Importante:** con `FREE_ONLY=1` (política por defecto), el gateway bloquea candidatos no identificados como free-tier explícito; el acceso oficial a Moonshot/Kimi normalmente depende de cuenta/créditos/términos del proveedor. Para usarlo bajo tu responsabilidad y con credenciales válidas, revisa `FREE_ONLY`/`ALLOW_PAID_MODELS` en `.env` y la documentación/estado real del proveedor. El gateway no puede garantizar que una cuenta upstream sea gratuita o ilimitada.
+
+### Verificación rápida
+```bash
+curl -sS http://109.123.248.91:8000/health
+curl -sS http://109.123.248.91:8000/v1/status -H "Authorization: Bearer TU_API_KEY_GATEWAY"
+curl -sS http://109.123.248.91:8000/v1/free -H "Authorization: Bearer TU_API_KEY_GATEWAY"
+```

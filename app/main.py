@@ -189,6 +189,34 @@ async def _status_response(_: bool = Depends(require_api_key_flexible)):
 for path in ["/v1/status", "/status", "/openai/v1/status", "/api/v1/status"]:
     app.add_api_route(path, _status_response, methods=["GET"], dependencies=[Depends(require_api_key_flexible)])
 
+
+
+async def _audit_response(_: bool = Depends(require_api_key_flexible)):
+    providers, models = await catalog(refresh=False)
+    ctrl = free_control_info()
+    rt = runtime_status()
+    def free_sig(m):
+        mid=(m.get('id') or '').lower(); up=(m.get('upstream_model') or '').lower(); prov=(m.get('provider') or '').lower()
+        return prov=='pollinations' or ':free' in mid or ':free' in up or mid.endswith('/free') or (prov=='openrouter' and up=='free')
+    clearly=[m for m in models if m.get('id')!='auto' and free_sig(m)]
+    active=[p for p in providers if p.get('active')]
+    return {
+        'object':'audit','status':'ok','time':int(time.time()),
+        'efficiency': {'catalog_cache_ttl_s': rt.get('catalog_ttl_s'), 'catalog_cache_age_s': rt.get('catalog_cache_age_s'), 'response_cache': response_cache.info()},
+        'intelligence': {'smart_routing': True, 'health_latency_scoring': True, 'cooldowns_active': len(rt.get('cooldowns') or {}), 'auto_candidates': rt.get('auto_candidates')},
+        'free_audit': {
+            **ctrl,
+            'active_providers': [{'id':p['id'],'label':p.get('label'),'always_on':p.get('always_on')} for p in active],
+            'clearly_free_models_count': len(clearly),
+            'sample_clearly_free': [m['id'] for m in clearly[:20]],
+            'verdict': 'POLICY_FREE_ONLY' if ctrl.get('free_only') else 'USER_OPT_IN_MODE',
+            'honest_note': 'Controlado por política/allowlist/metadatos. No hay prueba universal de gratuidad ilimitada upstream; proveedores aplican cuotas/rate limits/créditos/capacidad.',
+        },
+    }
+
+for path in ['/v1/audit','/audit','/openai/v1/audit','/api/v1/audit']:
+    app.add_api_route(path, _audit_response, methods=['GET'], dependencies=[Depends(require_api_key_flexible)])
+
 async def _models_response(_: bool = Depends(require_api_key_flexible)):
     providers, models = await catalog()
     data = [{
