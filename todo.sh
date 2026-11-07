@@ -34,6 +34,7 @@ Uso: ./todo.sh <comando>
   logs [N]       logs del servicio
   public-check   DNS/HTTPS/readyz
   improve        reporte con evidencia
+  code-test [q]  prueba de generación de código (evidencia, respeta rate limits)
 Cliente: export FT_AI_API_KEY=... ; Base https://ia.forthtrade.com/v1 ; model auto
 Nota: FREE_ONLY=gratis/controlado != ilimitado. Rotar FT_AI_API_KEY si se expuso.
 EOF
@@ -71,11 +72,27 @@ cmd_decision(){ local h q="${1:-Resume que es un AI gateway OpenAI-compatible}";
 cmd_restart(){ info "Reiniciando $SERVICE"; systemctl --user restart "$SERVICE"; sleep 4; systemctl --user is-active "$SERVICE" && ok "Activo" || { err "No activo"; cmd_logs 40; exit 1; }; curl -fsS -o /dev/null -w "health %{http_code} %{time_total}s\n" "$BASE/health" || warn "health público falló"; }
 cmd_logs(){ journalctl --user -u "$SERVICE" -n "${1:-80}" --no-pager; }
 cmd_public_check(){ getent ahostsv4 ia.forthtrade.com 2>&1 | awk '{print $1}' | head -1 | sed 's/^/dns ia.forthtrade.com -> /' || true; curl -fsSI --max-time 10 https://ia.forthtrade.com/health 2>&1 | grep -Ei 'HTTP/|x-gateway-version|x-request-id' | head -4 || warn "HTTPS falló"; curl -fsS -o /dev/null -w "readyz %{http_code} %{time_total}s\n" "$BASE/readyz" 2>&1 || true; }
+
 cmd_improve(){ need_py; local k; k="$(load_key)"; info "Reporte mejora (evidencia) key=$(mask "$k")"; hr; cmd_health || true; hr; if [[ -n "$k" ]]; then cmd_audit || true; hr; info "Chat probe"; curl -sS --max-time 45 "$BASE/v1/chat/completions" -H "Authorization: Bearer $k" -H 'Content-Type: application/json' -d '{"model":"auto","messages":[{"role":"user","content":"Responde solo: OK"}],"max_tokens":8,"temperature":0}' | "$PY" -c 'import sys,json; d=json.load(sys.stdin); g=d.get("gateway") or {}; det=d.get("detail") or {}; c=((d.get("choices") or [{}])[0].get("message") or {}).get("content"); print("ok=",bool(c and not det),"selected=",g.get("selected") or det.get("provider"),"tries=",len(g.get("attempts") or det.get("attempts") or []));
 if det: print("error=",(det.get("message") or "")[:200])' 2>&1 || true; fi; hr; cat <<'EOF'
 Mejoras (con evidencia): agregar claves free-tier válidas en .env; TAVILY/BRAVE/SEARXNG para búsqueda; temperature=0+max_tokens para latencia/caché; monitorear /v1/metrics,/v1/audit; rotar FT_AI_API_KEY si expuesta; HTTPS. FREE_ONLY=gratis/controlado != ilimitado.
 EOF
 }
+cmd_code_test(){
+  local h q="${1:-Escribe una función Python `clamp(x, lo, hi)` con type hints y docstring breve. Devuelve solo código.}"; h="$(auth_hdr)"
+  info "Code-gen probe (temperature=0, auto; puede fallar por cuotas free)"
+  curl -sS --max-time 90 -X POST "$BASE/v1/chat/completions" -H "$h" -H 'Content-Type: application/json' \
+    -d "{\"model\":\"auto\",\"temperature\":0,\"max_tokens\":350,\"messages\":[{\"role\":\"user\",\"content\":$(printf '%s' "$q" | "$PY" -c 'import json,sys; print(json.dumps(sys.stdin.read()))')}]}" | \
+    "$PY" -c 'import sys,json
+try:
+ d=json.load(sys.stdin); g=d.get("gateway") or {}; det=d.get("detail") or {}; c=((d.get("choices") or [{}])[0].get("message") or {}).get("content")
+ print("ok=",bool(c and not det),"selected=",g.get("selected") or d.get("model"),"tries=",len(g.get("attempts") or det.get("attempts") or []))
+ if det: print("error=",(det.get("message") or "")[:280])
+ if c: print("---\n"+c[:4000])
+except Exception as e: print("probe_error=",e)
+'
+}
+
 cmd_all(){ info "TODO-EN-UNO"; cmd_env; hr; cmd_install; hr; cmd_check; hr; cmd_smoke; hr; cmd_status; hr; cmd_health || true; hr; cmd_improve || true; hr; ok "Completo. Revisa WARN/ERR."; }
 cmd="${1:-help}"; shift || true
 case "$cmd" in help|-h|--help) cmd_help;; all) cmd_all;; env) cmd_env;; install) cmd_install;; check) cmd_check;; smoke) cmd_smoke;; status) cmd_status;; health) cmd_health;; audit) cmd_audit;; search) cmd_search "$@";; decision) cmd_decision "$@";; restart) cmd_restart;; logs) cmd_logs "$@";; public-check) cmd_public_check;; improve) cmd_improve;; *) err "Comando desconocido: $cmd"; cmd_help; exit 1;; esac

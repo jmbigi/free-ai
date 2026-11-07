@@ -45,3 +45,6 @@ cd /home/admin/free-ai && ./run.sh
 
 ## Limitación real (obligatoria)
 **Gratis/controlado ≠ ilimitado.** `FREE_ONLY` prioriza candidatos free-tier/anónimos explícitos, pero proveedores upstream imponen cuotas, rate limits, créditos, términos o capacidad variable. El gateway maximiza disponibilidad; **no garantiza inferencia remota avanzada gratuita ilimitada**. Reportar estado con evidencia (`/v1/audit`, `/v1/metrics`, `attempts`).
+
+## Programación autónoma
+Ver `AGENT_PROGRAMMING.md` para conexión OpenAI-compatible (KiloCode/OpenCode/Kimi/DeepSeek harness/SDK), tools, `/v1/responses`, `/v1/search`, `/v1/decision` y límites FREE_ONLY.
