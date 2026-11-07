@@ -495,7 +495,9 @@ for path in [
 
 
 @app.get('/readyz')
+@app.head('/readyz')
 @app.get('/v1/readyz')
+@app.head('/v1/readyz')
 async def readyz():
     # lightweight readiness (no upstream calls)
     return {'status':'ready','time':int(time.time()),'version':app.version}
