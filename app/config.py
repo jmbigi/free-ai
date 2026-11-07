@@ -223,4 +223,12 @@ class SettingsProxy:
         return self.cache_max_entries
 
 
+    # Optional web search / knowledge providers (free tiers / self-hosted)
+    @property
+    def tavily_api_key(self) -> str: return _read_env('TAVILY_API_KEY','')
+    @property
+    def brave_search_api_key(self) -> str: return _read_env('BRAVE_SEARCH_API_KEY','') or _read_env('BRAVE_API_KEY','')
+    @property
+    def searxng_base_url(self) -> str: return _read_env('SEARXNG_BASE_URL','')
+
 settings = SettingsProxy()

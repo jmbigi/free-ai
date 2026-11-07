@@ -20,7 +20,7 @@ from .help_page import render_help_html, help_payload
 
 app = FastAPI(
     title="Free AI Gateway",
-    version="2.2.0",
+    version="2.3.0",
     description=(
         "Gateway productivo OpenAI-compatible con una API key simple (.env API_KEY). "
         "Agrega y enruta a APIs remotas gratuitas/configuradas con fallback automático, "
@@ -149,14 +149,50 @@ async function load(){ $('out').textContent='Cargando...'; try{ const m=await ap
 $('reload').onclick=load; $('send').onclick=async()=>{ $('out').textContent='Generando...'; try{ const d=await api('/v1/chat/completions',{method:'POST',body:JSON.stringify({model:$('model').value||'auto',messages:[{role:'user',content:$('prompt').value}],temperature:parseFloat($('temp').value||'0'),max_tokens:parseInt($('max_tokens').value||'512',10),cache:true,compress_context:true})}); $('out').textContent=(d?.choices?.[0]?.message?.content||JSON.stringify(d,null,2))+`\n\n---\nprovider=${d.provider||'?'} model=${d.model||'?'} cache=${JSON.stringify(d.gateway?.cache||{})} context=${JSON.stringify(d.gateway?.context||d.gateway?.context_compressed||false)}` }catch(e){$('out').textContent=JSON.stringify(e,null,2)} }; load();
 </script></body></html>"""
 
+def _normalize_legacy_tools(body: dict[str, Any]) -> dict[str, Any]:
+    # Legacy functions/function_call -> tools/tool_choice for broad compatibility.
+    if 'tools' not in body and isinstance(body.get('functions'), list):
+        tools = []
+        for fn in body['functions']:
+            if isinstance(fn, dict):
+                tools.append({'type': 'function', 'function': fn})
+        if tools:
+            body['tools'] = tools
+    if 'tool_choice' not in body and 'function_call' in body:
+        fc = body.get('function_call')
+        if isinstance(fc, dict) and fc.get('name'):
+            body['tool_choice'] = {'type': 'function', 'function': {'name': fc['name']}}
+        elif fc in ('auto', 'none', 'required'):
+            body['tool_choice'] = fc
+    # normalize assistant/tool message legacy fields
+    msgs = body.get('messages')
+    if isinstance(msgs, list):
+        out = []
+        for m in msgs:
+            if not isinstance(m, dict):
+                continue
+            mm = dict(m)
+            if mm.get('role') == 'function':
+                mm['role'] = 'tool'
+                if 'tool_call_id' not in mm and mm.get('name'):
+                    mm['tool_call_id'] = f"call_legacy_{mm['name']}"
+            if 'function_call' in mm and 'tool_calls' not in mm and isinstance(mm.get('function_call'), dict):
+                fc = mm['function_call']
+                mm['tool_calls'] = [{'id': f"call_legacy_{fc.get('name','fn')}", 'type': 'function', 'function': {'name': fc.get('name'), 'arguments': fc.get('arguments') or '{}'}}]
+            out.append(mm)
+        body['messages'] = out
+    return body
+
 def _normalize_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+        raise HTTPException(status_code=400, detail=_openai_error("Body must be a JSON object", type_="invalid_request_error", code=400))
     body = dict(payload)
     body.setdefault("model", "auto")
     if "max_completion_tokens" in body and "max_tokens" not in body:
         body["max_tokens"] = body.get("max_completion_tokens")
     body.pop("max_completion_tokens", None)
+    if "max_output_tokens" in body and "max_tokens" not in body:
+        body["max_tokens"] = body.get("max_output_tokens")
     if "messages" not in body and "prompt" in body:
         prompt = body.get("prompt")
         if isinstance(prompt, list):
@@ -171,17 +207,33 @@ def _normalize_payload(payload: Any) -> dict[str, Any]:
         elif isinstance(inp, list):
             msgs = []
             for item in inp:
-                if isinstance(item, dict) and item.get("content") is not None:
+                if isinstance(item, dict):
                     role = item.get("role") or "user"
                     c = item.get("content")
+                    if c is None and item.get('type') == 'message':
+                        c = item.get('text')
                     if isinstance(c, list):
-                        c = "\n".join(str(x.get('text','') if isinstance(x,dict) else x) for x in c)
-                    msgs.append({"role": role, "content": str(c)})
+                        parts = []
+                        for x in c:
+                            if isinstance(x, dict):
+                                parts.append(str(x.get('text') or x.get('input_text') or x.get('output_text') or ''))
+                            else:
+                                parts.append(str(x))
+                        c = "\n".join([p for p in parts if p])
+                    if c is not None or item.get('tool_calls'):
+                        msg = {"role": role, "content": c}
+                        for k in ('tool_calls','tool_call_id','name','function_call'):
+                            if k in item: msg[k] = item[k]
+                        msgs.append(msg)
             if msgs:
                 body["messages"] = msgs
                 body.pop("input", None)
+    body = _normalize_legacy_tools(body)
     if "messages" not in body:
-        raise HTTPException(status_code=400, detail="Missing messages/prompt/input")
+        raise HTTPException(status_code=400, detail=_openai_error("Missing messages/prompt/input", type_="invalid_request_error", param="messages", code=400))
+    body['messages'], repair = repair_messages(body['messages'])
+    if repair.get('repaired') or repair.get('missing_tool_results'):
+        body.setdefault('gateway', {})['tool_repair'] = repair
     return body
 
 
@@ -529,6 +581,85 @@ async def _responses(request: Request, _: bool = Depends(require_api_key_flexibl
 
 for path in ['/v1/responses','/responses','/openai/v1/responses']:
     app.add_api_route(path, _responses, methods=['POST'], dependencies=[Depends(require_api_key_flexible)])
+
+
+
+async def _search(request: Request, _: bool = Depends(require_api_key_flexible)):
+    try: raw = await request.json() if request.method == 'POST' else {}
+    except Exception: raw = {}
+    if request.method == 'GET':
+        q = request.query_params.get('q') or request.query_params.get('query') or ''
+        provider = request.query_params.get('provider') or 'auto'
+        n = request.query_params.get('max_results') or request.query_params.get('n') or '5'
+        return await web_search(q, max_results=int(n), provider=provider)
+    q = (raw.get('query') or raw.get('q') or raw.get('search') or '') if isinstance(raw, dict) else ''
+    provider = (raw.get('provider') or 'auto') if isinstance(raw, dict) else 'auto'
+    n = (raw.get('max_results') or raw.get('n') or 5) if isinstance(raw, dict) else 5
+    return await web_search(str(q), max_results=int(n), provider=str(provider))
+
+for path in ['/v1/search','/search','/v1/tools/search','/openai/v1/search']:
+    app.add_api_route(path, _search, methods=['GET','POST'], dependencies=[Depends(require_api_key_flexible)])
+
+async def _kb_search(request: Request, _: bool = Depends(require_api_key_flexible)):
+    if request.method == 'GET':
+        q = request.query_params.get('q') or ''; n = request.query_params.get('n') or '5'; return kb_query(q, limit=int(n))
+    try: raw = await request.json()
+    except Exception: raw = {}
+    return kb_query(str((raw or {}).get('query') or (raw or {}).get('q') or ''), limit=int((raw or {}).get('limit') or (raw or {}).get('n') or 5))
+
+async def _kb_add(request: Request, _: bool = Depends(require_api_key_flexible)):
+    try: raw = await request.json()
+    except Exception: raise HTTPException(status_code=400, detail='Invalid JSON body')
+    if not isinstance(raw, dict): raise HTTPException(status_code=400, detail='Body must be a JSON object')
+    item = kb_add(title=str(raw.get('title') or raw.get('query') or 'source'), url=str(raw.get('url') or ''), content=str(raw.get('content') or raw.get('text') or ''), tags=raw.get('tags') if isinstance(raw.get('tags'), list) else [], source=str(raw.get('source') or 'api'), meta=raw.get('meta') if isinstance(raw.get('meta'), dict) else {})
+    return {'object':'knowledge.item','item':item, **kb_stats()}
+
+async def _kb_stats(_: bool = Depends(require_api_key_flexible)):
+    return kb_stats()
+
+for path in ['/v1/knowledge/search','/knowledge/search']: app.add_api_route(path, _kb_search, methods=['GET','POST'], dependencies=[Depends(require_api_key_flexible)])
+for path in ['/v1/knowledge/add','/knowledge/add']: app.add_api_route(path, _kb_add, methods=['POST'], dependencies=[Depends(require_api_key_flexible)])
+for path in ['/v1/knowledge','/knowledge']: app.add_api_route(path, _kb_stats, methods=['GET'], dependencies=[Depends(require_api_key_flexible)])
+
+async def _decision(request: Request, _: bool = Depends(require_api_key_flexible)):
+    """Decision/agent helper: optionally searches, compresses evidence, then asks auto model."""
+    try: raw = await request.json()
+    except Exception: raise HTTPException(status_code=400, detail='Invalid JSON body')
+    if not isinstance(raw, dict): raise HTTPException(status_code=400, detail='Body must be a JSON object')
+    objective = str(raw.get('objective') or raw.get('query') or raw.get('prompt') or '').strip()
+    if not objective: raise HTTPException(status_code=400, detail='Missing objective/query')
+    do_search = bool(raw.get('search', True))
+    evidence = []
+    search_result = None
+    if do_search:
+        search_result = await web_search(objective, max_results=int(raw.get('max_results') or 5), provider=str(raw.get('search_provider') or 'auto'))
+        for r in (search_result.get('results') or [])[:5]:
+            evidence.append(f"- {r.get('title','')}\n  {r.get('url','')}\n  {str(r.get('snippet',''))[:500]}")
+            try: kb_add(title=r.get('title') or objective[:80], url=r.get('url') or '', content=r.get('snippet') or '', tags=['search','decision'], source='web-search', meta={'objective': objective[:200]})
+            except Exception: pass
+    kb = kb_query(objective, limit=3)
+    for r in (kb.get('results') or [])[:3]:
+        evidence.append(f"- [KB] {r.get('title','')}\n  {r.get('url','')}\n  {str(r.get('content',''))[:400]}")
+    messages = raw.get('messages') if isinstance(raw.get('messages'), list) else []
+    if not messages:
+        messages = [
+            {'role':'system','content':'Eres un motor de decisión robusto. Usa evidencia disponible, cita URLs cuando existan, separa hechos de inferencias, y declara incertidumbre/limitaciones. Responde útil, eficiente y verificable.'},
+            {'role':'user','content': f"Objetivo: {objective}\n\nEvidencia recopilada:\n" + ("\n".join(evidence) if evidence else "(sin evidencia web/KB disponible; responde con cautela)") + "\n\nEntrega: decisión/recomendación, pasos, riesgos, fuentes."}
+        ]
+    payload = {'model': raw.get('model') or 'auto', 'messages': messages, 'temperature': raw.get('temperature', 0.2), 'max_tokens': raw.get('max_tokens', 700), 'cache': raw.get('cache', False)}
+    optimized = compress_messages(copy.deepcopy(payload))
+    try:
+        data, _ = await execute_with_fallback(optimized)
+        answer = ((data.get('choices') or [{}])[0].get('message') or {}).get('content','')
+        return {'object':'decision','objective':objective,'answer':answer,'search':search_result,'knowledge':{'matches':kb.get('count',0)},'gateway':data.get('gateway'),'model':data.get('model')}
+    except ProviderError as e:
+        detail = {"message": str(e), "type": "provider_error", "provider": e.provider, "code": e.status}
+        atts = getattr(e,'attempts',None);
+        if atts: detail['attempts']=atts
+        raise HTTPException(status_code=e.status, detail=detail)
+
+for path in ['/v1/decision','/decision','/v1/agent/decision']:
+    app.add_api_route(path, _decision, methods=['POST'], dependencies=[Depends(require_api_key_flexible)])
 
 @app.get("/v1")
 @app.get("/openai/v1")
