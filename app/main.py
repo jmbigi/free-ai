@@ -17,6 +17,9 @@ from .providers.base import ProviderError
 from .router import catalog, execute_with_fallback, stream_with_fallback, runtime_status, free_control_info
 from .observability import metrics
 from .help_page import render_help_html, help_payload
+from .tool_repair import repair_messages
+from .search import web_search
+from .knowledge import add_source as kb_add, query as kb_query, stats as kb_stats
 
 app = FastAPI(
     title="Free AI Gateway",
