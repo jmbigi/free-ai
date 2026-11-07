@@ -209,35 +209,44 @@ async def index():
 @app.get("/v1/health")
 @app.get("/openai/v1/health")
 async def health():
-    providers, models = await catalog()
-    active = [p["id"] for p in providers if p.get("active")]
+    # Fast path: avoid upstream model-list calls on every health probe.
     snap = metrics.snapshot()
+    rt = runtime_status()
+    providers = []
+    for p in __import__('app.router', fromlist=['_instances'])._instances():
+        st = rt.get('stats', {}).get(p.id, {})
+        providers.append({"id": p.id, "label": p.label, "active": p.available(), "always_on": p.id == "pollinations", "stats": st})
+    active = [p["id"] for p in providers if p.get("active")]
     return {
         "status": "ok",
         "time": int(time.time()),
         "version": app.version,
         "uptime_s": snap.get("uptime_s", 0),
         "service": "free-ai-gateway",
+        "public_base_url": "https://ia.forthtrade.com/v1",
         "active_providers": active,
         "providers": providers,
-        "models": len(models),
+        "models_hint": "GET /v1/models (auth) para catálogo completo; recomendado model=\"auto\".",
         "cache": response_cache.info(),
+        "metrics": {"requests_total": snap.get('requests_total'), "avg_latency_ms": snap.get('latency_ms',{}).get('avg'), "p95_latency_ms": snap.get('latency_ms',{}).get('p95')},
         "context_compression": {
             "enabled": bool(getattr(settings, 'context_compress_enabled', True)),
             "max_chars": int(getattr(settings, 'context_max_chars', 120000)),
             "keep_last_messages": int(getattr(settings, 'context_keep_last_messages', 12)),
             "message_max_chars": int(getattr(settings, 'context_message_max_chars', 12000)),
         },
-        "auth": "Simple API key from .env (API_KEY or FT_AI_API_KEY). Send Authorization: Bearer <key>, api-key, x-api-key, key, or ?api_key=/?key=. Clients may set env FT_AI_API_KEY.",
+        "auth": "Simple API key from .env (API_KEY or FT_AI_API_KEY). Authorization: Bearer <key>, api-key, x-api-key, or ?api_key=. Env cliente: FT_AI_API_KEY.",
+        "help": {"html": "https://ia.forthtrade.com/help", "json": "https://ia.forthtrade.com/help.json"},
         "compatibility": {
-            "base_urls": ["/v1", "/openai/v1", "/api/v1"],
-            "chat": ["POST /v1/chat/completions", "POST /chat/completions", "POST /openai/v1/chat/completions"],
-            "models": ["GET /v1/models", "GET /models"],
-            "cache": ["GET /v1/cache", "POST /v1/cache/clear"],
+            "base_urls": ["https://ia.forthtrade.com/v1", "/v1", "/openai/v1", "/api/v1"],
+            "chat": ["POST /v1/chat/completions"],
+            "responses": ["POST /v1/responses"],
+            "models": ["GET /v1/models"],
+            "observability": ["GET /readyz", "GET /v1/metrics", "GET /v1/audit", "GET /v1/status", "GET /v1/free"],
         },
         "notes": [
-            "No existe inferencia remota avanzada realmente ilimitada y gratis sin restricciones; los tiers gratuitos tienen cuotas/rate limits/créditos.",
-            "El gateway maximiza acceso con una API key simple, agregación de cuentas gratuitas en .env, fallback automático, caché y compresión de contexto.",
+            "Gratis/controlado (FREE_ONLY) ≠ ilimitado: proveedores aplican cuotas/rate limits/créditos/capacidad.",
+            "Usa model=\"auto\"; temperature=0 habilita caché para respuestas repetibles; max_tokens reduce latencia.",
         ],
     }
 

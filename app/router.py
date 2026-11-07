@@ -36,12 +36,12 @@ def _instances():
     return _INSTANCES
 
 # Ordered fallback candidates. Only active/configured providers are used (except pollinations).
+# Prefer anonymous/free-tier paths that are empirically available; keep direct :free model IDs as hints
+# but some may return 404 depending on OpenRouter free policy/capacity.
 AUTO_CANDIDATES = [
     ("pollinations", "openai-fast", "Pollinations anónimo"),
+    ("pollinations", "openai", "Pollinations anónimo"),
     ("openrouter", "openrouter/free", "OpenRouter router free"),
-    ("openrouter", "meta-llama/llama-3.3-70b-instruct:free", "OpenRouter :free"),
-    ("openrouter", "qwen/qwen3-coder:free", "OpenRouter :free"),
-    ("openrouter", "google/gemma-3-27b-it:free", "OpenRouter :free"),
     ("groq", "llama-3.3-70b-versatile", "Groq"),
     ("nvidia", "meta/llama-3.3-70b-instruct", "NVIDIA NIM"),
     ("nvidia", "nvidia/nemotron-3-super-120b-a12b", "NVIDIA NIM"),
@@ -54,8 +54,9 @@ AUTO_CANDIDATES = [
     ("deepseek", "deepseek-chat", "DeepSeek official"),
     ("moonshot", "kimi-k2-0711-preview", "Moonshot/Kimi"),
     ("opencode", "big-pickle", "OpenCode"),
-    ("pollinations", "openai", "Pollinations anónimo"),
-    ("openrouter", "stepfun/step-3.5-flash:free", "OpenRouter :free"),
+    ("openrouter", "meta-llama/llama-3.3-70b-instruct:free", "OpenRouter :free"),
+    ("openrouter", "qwen/qwen3-coder:free", "OpenRouter :free"),
+    ("openrouter", "google/gemma-3-27b-it:free", "OpenRouter :free"),
 ]
 
 
