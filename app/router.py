@@ -392,7 +392,20 @@ async def stream_with_fallback(payload: dict[str, Any]) -> AsyncIterator[bytes]:
             candidates.append((p, m)); tried.add(m.id)
         except Exception:
             pass
-    candidates.extend(_build_auto_plan(exclude=tried, max_items=12))
+    plan = _build_auto_plan(exclude=tried, max_items=max_attempts)
+    # Force-include fast pollinations candidates when FREE_ONLY allows, unless explicitly excluded/blocked by long cooldown.
+    if requested == 'auto':
+        forced = []
+        for pid, upstream, label in [('pollinations','openai-fast','Pollinations anónimo'),('pollinations','openai','Pollinations anónimo')]:
+            mid=f'{pid}/{upstream}'
+            if mid in tried or _cooldown_left(mid) > 45: continue
+            pp=get_provider(pid)
+            if not pp: continue
+            mm=ModelInfo(id=mid,provider=pid,owned_by=pid,upstream_model=upstream,capabilities=['chat'],note=label,free=True)
+            if not any(m.id==mid for _,m in plan): forced.append((pp,mm))
+        if forced:
+            plan = forced + [(p,m) for p,m in plan if not m.id.startswith('pollinations/')]
+    candidates.extend(plan)
     errors = []
     for p, m in candidates[:10]:
         if _cooldown_left(m.id) > 15:
