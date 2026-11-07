@@ -303,7 +303,12 @@ async def _chat(request: Request, _: bool = Depends(require_api_key_flexible)):
             response_cache.set(key, data, int(getattr(settings, 'cache_ttl_seconds', 300)))
         return JSONResponse(data)
     except ProviderError as e:
-        raise HTTPException(status_code=e.status, detail={"message": str(e), "type": "provider_error", "provider": e.provider, "model": optimized.get("model"), "code": e.status})
+        detail = {"message": str(e), "type": "provider_error", "provider": e.provider, "model": optimized.get("model"), "code": e.status}
+        atts = getattr(e, 'attempts', None)
+        if atts:
+            detail["attempts"] = atts
+            detail["attempt_count"] = len(atts)
+        raise HTTPException(status_code=e.status, detail=detail)
 
 for path in [
     "/v1/chat/completions", "/chat/completions", "/openai/v1/chat/completions", "/api/v1/chat/completions",

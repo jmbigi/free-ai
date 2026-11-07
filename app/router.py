@@ -286,6 +286,7 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
             data["gateway"]["attempts"] = attempts
             data["gateway"]["fallback_used"] = requested != model.id and (requested != 'auto' or len(attempts) > 1)
             data["gateway"]["selected"] = model.id
+            data["gateway"]["max_attempts"] = max_attempts
             data["requested_model"] = requested
             data["gateway"]["free_control"] = _free_control_info()
             data["gateway"]["selected_is_free_tier"] = _is_free_model(model)
@@ -297,6 +298,17 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
             _mark_cooldown(model.id, _cooldown_for(e))
             attempts.append({"provider": provider.id, "model": model.id, "ok": False, "ms": ms, "error": err, "retryable": _retryable(e)})
             return None
+
+    def _raise_final(status: int = 502):
+        detail = " | ".join(f"{a['provider']}/{a['model'].split('/',1)[-1]}: {a.get('error','')[:140]}" for a in attempts[-8:]) or "Sin proveedores disponibles"
+        err = ProviderError(
+            f"Todos los proveedores/cuentas disponibles fallaron o están limitados en este intento ({len(attempts)} intento(s), max={max_attempts}). {detail}. "
+            "Sugerencia: usa model:\"auto\" con caché, espacia peticiones (Pollinations anónimo ~45s/IP), o agrega más cuentas/candidatos free-tier en .env. "
+            "Limitación real: los tiers gratuitos tienen cuotas/rate limits/créditos/capacidad variable; no es inferencia ilimitada garantizada.",
+            status=status, provider="gateway",
+        )
+        err.attempts = attempts  # type: ignore[attr-defined]
+        raise err
 
     if requested != "auto":
         provider, model = await resolve_model(requested)
@@ -312,27 +324,45 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
         last = attempts[-1] if attempts else {}
         if not last.get("retryable", True):
             detail = last.get("error") or "Solicitud rechazada por el proveedor"
-            raise ProviderError(f"{provider.id}/{model.upstream_model}: {detail}", status=getattr(provider, 'last_status', 502) or 502, provider=provider.id)
+            err = ProviderError(f"{provider.id}/{model.upstream_model}: {detail}", status=getattr(provider, 'last_status', 502) or 502, provider=provider.id)
+            err.attempts = attempts  # type: ignore[attr-defined]
+            raise err
 
-    for provider, model in _build_auto_plan(exclude=tried, max_items=max_attempts * 3):
-        if len([a for a in attempts if not a.get('ok')]) >= max_attempts:
+    # Build plan and attempt across providers; for free-tier-only pools, respect short cooldown waits when needed.
+    while len([a for a in attempts]) < max_attempts:
+        plan = _build_auto_plan(exclude=tried, max_items=max_attempts * 4)
+        if not plan:
+            # If everything is on cooldown, wait briefly for the soonest viable candidate (max 10s) up to max_attempts budget.
+            viable = []
+            for pid, upstream, label in AUTO_CANDIDATES:
+                p = get_provider(pid)
+                if not p or not (p.available() or pid == "pollinations"): continue
+                mid = f"{pid}/{upstream}"; m = ModelInfo(id=mid, provider=pid, owned_by=pid, upstream_model=upstream, capabilities=["chat"], note=label)
+                if getattr(settings,'free_only',True) and getattr(settings,'block_unknown_paid',True) and not _is_free_model(m): continue
+                viable.append((mid, _cooldown_left(mid), p, m))
+            viable.sort(key=lambda x: x[1])
+            if viable and viable[0][1] <= 12 and len(attempts) < max_attempts:
+                wait = min(12.0, viable[0][1] + 0.2)
+                attempts.append({"provider":"gateway","model":"wait","ok":False,"ms":int(wait*1000),"error":f"Esperando cooldown {wait:.1f}s para {viable[0][0]}","retryable":True})
+                await asyncio.sleep(wait)
+                tried.discard(viable[0][0])
+                plan = _build_auto_plan(exclude=tried, max_items=max_attempts * 2)
+            if not plan:
+                break
+        made = False
+        for provider, model in plan:
+            if len(attempts) >= max_attempts:
+                break
+            if _cooldown_left(model.id) > 12 and any(not _on_cooldown(f"{pid2}/{u}") for pid2,u,_ in AUTO_CANDIDATES if (pp:=get_provider(pid2)) and (pp.available() or pid2=='pollinations')):
+                tried.add(model.id); continue
+            tried.add(model.id); made = True
+            data = await try_one(provider, model)
+            if data:
+                return data, attempts
+            await asyncio.sleep(0.05)
+        if not made:
             break
-        if _cooldown_left(model.id) > 15 and any(p.available() and not _on_cooldown(f"{p.id}/{u}") for p in _instances() for pid2, u, _ in AUTO_CANDIDATES if pid2 == p.id):
-            tried.add(model.id)
-            continue
-        tried.add(model.id)
-        data = await try_one(provider, model)
-        if data:
-            return data, attempts
-        await asyncio.sleep(0.05)
-
-    detail = " | ".join(f"{a['provider']}/{a['model'].split('/',1)[-1]}: {a.get('error','')[:140]}" for a in attempts[-6:]) or "Sin proveedores disponibles"
-    raise ProviderError(
-        f"Todos los proveedores/cuentas disponibles fallaron o están limitados en este intento. {detail}. "
-        "Sugerencia: usa model:\"auto\" con caché o agrega más cuentas gratuitas en .env. "
-        "Limitación real: los tiers gratuitos tienen cuotas/rate limits/créditos.",
-        status=502, provider="gateway",
-    )
+    _raise_final()
 
 
 async def stream_with_fallback(payload: dict[str, Any]) -> AsyncIterator[bytes]:
