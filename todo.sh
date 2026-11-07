@@ -12,7 +12,8 @@ load_key(){
   [[ -n "${API_KEY:-}" ]] && { printf '%s' "$API_KEY"; return; }
   [[ -f .env && -x "$PY" ]] && "$PY" - <<'PY'
 from dotenv import dotenv_values
-v=dotenv_values('.env'); print((v.get('FT_AI_API_KEY') or v.get('API_KEY') or '').strip().strip('"'"'"'"'"'"'"'"'))
+v=dotenv_values('.env')
+print((v.get('FT_AI_API_KEY') or v.get('API_KEY') or '').strip().strip('\'"'))
 PY
 }
 mask(){ local s="${1:-}"; [[ -z "$s" ]] && echo MISSING || { [[ ${#s} -le 8 ]] && echo SET || echo "${s:0:4}...${s: -4}"; }; }
@@ -78,4 +79,3 @@ EOF
 cmd_all(){ info "TODO-EN-UNO"; cmd_env; hr; cmd_install; hr; cmd_check; hr; cmd_smoke; hr; cmd_status; hr; cmd_health || true; hr; cmd_improve || true; hr; ok "Completo. Revisa WARN/ERR."; }
 cmd="${1:-help}"; shift || true
 case "$cmd" in help|-h|--help) cmd_help;; all) cmd_all;; env) cmd_env;; install) cmd_install;; check) cmd_check;; smoke) cmd_smoke;; status) cmd_status;; health) cmd_health;; audit) cmd_audit;; search) cmd_search "$@";; decision) cmd_decision "$@";; restart) cmd_restart;; logs) cmd_logs "$@";; public-check) cmd_public_check;; improve) cmd_improve;; *) err "Comando desconocido: $cmd"; cmd_help; exit 1;; esac
-BASH
