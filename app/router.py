@@ -213,8 +213,10 @@ def _retryable(exc: Exception) -> bool:
 def _cooldown_for(exc: Exception) -> float:
     msg = str(exc).lower()
     status = getattr(exc, 'status', None)
-    if 'pollinations' in msg and ('45 seconds' in msg or 'free limit' in msg or 'every 45' in msg):
+    if 'pollinations' in msg and ('45 seconds' in msg or 'free limit' in msg or 'every 45' in msg or 'rate limit' in msg):
         return 46.0
+    if 'pollinations' in msg and status in (500, 502, 503, 504):
+        return 4.0
     if status == 402 or 'insufficient' in msg or 'credit' in msg or 'balance' in msg or 'budget' in msg:
         return 120.0
     if status == 429 or '429' in msg or 'rate limit' in msg or 'quota' in msg or 'free limit' in msg:
@@ -261,17 +263,21 @@ def _build_auto_plan(*, exclude: set[str], max_items: int) -> list[tuple[Any, Mo
         if getattr(settings, 'free_only', True) and getattr(settings, 'block_unknown_paid', True) and not _is_free_model(m):
             continue
         left = _cooldown_left(mid)
-        if left > 8:
-            continue  # skip hot cooldowns for latency
+        # keep pollinations eligible through short transient cooldowns; skip long/hard cooldowns
+        if left > 45:
+            continue
+        if left > 10 and pid != 'pollinations':
+            continue
         st = _stat(pid)
         ema = st.get('ema_ms') or 5000
         fail_penalty = min(st['fail'], 20) * 2.0
-        # Prefer pollinations/openai-fast strongly when not cooling down (fast anonymous free path)
         fast_bonus = 12.0 if mid == 'pollinations/openai-fast' and left <= 0 else 0.0
         if mid.startswith('pollinations/') and left <= 0:
             fast_bonus = max(fast_bonus, 6.0)
+        if left > 0:
+            fast_bonus -= min(left, 8) * 0.8
         health = (st['ok'] * 2.0) - fail_penalty - (ema / 3000.0) + fast_bonus
-        score = (1 if left > 0 else 0, left, -health, idx)
+        score = (1 if left > 3 else 0, left, -health, idx)
         scored.append((score, p, m))
     scored.sort(key=lambda x: x[0])
     return [(p, m) for _, p, m in scored[:max_items]]
