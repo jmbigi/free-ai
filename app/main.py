@@ -12,6 +12,7 @@ from .config import settings
 from .context import compress_messages
 from .providers.base import ProviderError
 from .router import catalog, execute_with_fallback, stream_with_fallback, runtime_status, free_control_info
+from .help_page import render_help_html, help_payload
 
 app = FastAPI(
     title="Free AI Gateway",
@@ -97,6 +98,23 @@ def _normalize_payload(payload: Any) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Missing messages/prompt/input")
     return body
 
+
+
+@app.get("/help", response_class=HTMLResponse)
+@app.get("/connect", response_class=HTMLResponse)
+@app.get("/v1/help/ui", response_class=HTMLResponse)
+async def help_ui(request: Request):
+    base = str(request.base_url).rstrip('/')
+    # prefer configured public base for displayed examples
+    public = "https://ia.forthtrade.com"
+    return render_help_html(public)
+
+@app.get("/help.json")
+@app.get("/v1/help")
+@app.get("/openai/v1/help")
+async def help_json(request: Request):
+    return help_payload("https://ia.forthtrade.com")
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return INDEX_HTML
@@ -122,7 +140,7 @@ async def health():
             "keep_last_messages": int(getattr(settings, 'context_keep_last_messages', 12)),
             "message_max_chars": int(getattr(settings, 'context_message_max_chars', 12000)),
         },
-        "auth": "Simple API key from .env (API_KEY). Send Authorization: Bearer <key>, api-key, x-api-key, key, or ?api_key=/?key=.",
+        "auth": "Simple API key from .env (API_KEY or FT_AI_API_KEY). Send Authorization: Bearer <key>, api-key, x-api-key, key, or ?api_key=/?key=. Clients may set env FT_AI_API_KEY.",
         "compatibility": {
             "base_urls": ["/v1", "/openai/v1", "/api/v1"],
             "chat": ["POST /v1/chat/completions", "POST /chat/completions", "POST /openai/v1/chat/completions"],

@@ -11,7 +11,7 @@ def _expected_key() -> str:
         vals = dotenv_values(_env)
     except Exception:
         vals = {}
-    for k in ("API_KEY",):
+    for k in ("API_KEY","FT_AI_API_KEY","FTAI_API_KEY","FREE_AI_API_KEY","GATEWAY_API_KEY"):
         v = vals.get(k) or os.getenv(k) or settings.api_key
         if v:
             return str(v).strip().strip("'\"")
@@ -66,7 +66,7 @@ async def require_api_key_flexible(
     if token is None and authorization and authorization.strip():
         token = authorization.strip()
     if token != expected:
-        raise HTTPException(status_code=401, detail={"message": "Invalid or missing API key", "accepted": ["Authorization: Bearer <API_KEY>", "api-key", "x-api-key", "key/api_key query", "body api_key"]})
+        raise HTTPException(status_code=401, detail={"message": "Invalid or missing API key", "accepted": ["Authorization: Bearer <API_KEY|FT_AI_API_KEY>", "api-key", "x-api-key", "key/api_key query", "body api_key", "env FT_AI_API_KEY/API_KEY"]})
     return True
 
 # backward compat

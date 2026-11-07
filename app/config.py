@@ -56,7 +56,8 @@ def _read_int(name: str, default: int) -> int:
 class SettingsProxy:
     @property
     def api_key(self) -> str:
-        return _read_env("API_KEY", "")
+        # Client gateway key: accept common env names for easy integration.
+        return _read_env("API_KEY", "") or _read_env("FT_AI_API_KEY", "") or _read_env("FTAI_API_KEY", "") or _read_env("FREE_AI_API_KEY", "") or _read_env("GATEWAY_API_KEY", "")
 
     @property
     def host(self) -> str:
