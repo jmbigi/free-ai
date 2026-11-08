@@ -189,7 +189,7 @@ def _grep(args: dict[str, Any]) -> dict[str, Any]:
 async def _web_search(args: dict[str, Any]) -> dict[str, Any]:
     from .search import web_search
     res = await web_search(str(args.get("query") or ""))
-    return {"status": "ok", "object": res.get("object"), "provider": res.get("provider"), "count": len(res.get("results") or []), "error": res.get("error"), "results": res.get("results") or []}
+    return {"status": "ok", "object": res.get("object"), "provider": res.get("provider"), "count": len(res.get("results") or []), "error": res.get("error") or None, "results": res.get("results") or []}
 
 
 def _web_fetch(args: dict[str, Any]) -> dict[str, Any]:

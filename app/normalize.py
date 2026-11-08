@@ -25,10 +25,12 @@ def _extract_text(content: Any) -> str:
 
 def normalize_chat_response(data: dict[str, Any] | Any) -> Any:
     """Make upstream chat responses more compatible with OpenAI clients/gateway code.
-    - Preserves reasoning/thinking fields as separate entries when present.
+    - Preserves reasoning/thinking as separate entries when present.
     - Normalizes list content to text where safe.
     Never fabricates content when a real answer/tool call exists.
     Never silently drops reasoning fields into content (keeps them distinct for clients like KimiCode that expect separate reasoning UI).
+    When content is None/empty AND finish_reason is 'length', raise a clear error so
+    clients don't receive null content and confuse them with 'empty response'.
     """
     if not isinstance(data, dict):
         return data
@@ -42,6 +44,10 @@ def normalize_chat_response(data: dict[str, Any] | Any) -> Any:
         if not isinstance(msg, dict):
             continue
         text = _extract_text(msg.get('content'))
+        finish = ch.get('finish_reason') or (ch.get('native_finish_reason') if isinstance(ch.get('native_finish_reason'), str) else None)
+        # If content is empty but finish is "length" (token budget exhausted), raise to avoid null content confusion.
+        if not text and not msg.get('tool_calls') and not msg.get('function_call') and str(finish).lower() == 'length':
+            raise ValueError("Provider returned only reasoning content with finish_reason='length'; output token budget exhausted.")
         if not text and not msg.get('tool_calls') and not msg.get('function_call'):
             # Preserve reasoning/thinking as distinct fields; do NOT merge into content.
             # Remove marker if previously set, to keep reasoning distinct.

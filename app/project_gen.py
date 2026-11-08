@@ -140,7 +140,7 @@ def _quality_notes(files: list[dict[str, str]]) -> list[dict[str, Any]]:
     return notes
 
 
-async def generate_one(*, prompt: str, name: str, model: str = 'auto', max_tokens: int = 1800,
+async def generate_one(*, prompt: str, name: str, model: str = 'auto', max_tokens: int = 3200,
                        temperature: float = 0, max_retries: int = 3, retry_delay_s: float = 20.0,
                        keep_temp: bool = False) -> dict[str, Any]:
     base_parent = Path('/tmp/kilo'); base_parent.mkdir(parents=True, exist_ok=True)
@@ -168,7 +168,7 @@ async def generate_one(*, prompt: str, name: str, model: str = 'auto', max_token
         'Fix logging placeholders: token/uuid/id/request_id -> `%s`; integer attempt/count -> `%d`.'
     )
     payload = {
-        'model': model, 'temperature': temperature, 'max_tokens': max(256, min(4000, max_tokens)),
+        'model': model, 'temperature': temperature, 'max_tokens': max(256, min(8192, max_tokens)),
         'messages': [{'role': 'system', 'content': base_system}, {'role': 'user', 'content': prompt}],
         'stream': False, 'gateway': {'max_retries': int(getattr(settings, 'default_max_retries', 4) or 4)},
     }

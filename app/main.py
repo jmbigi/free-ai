@@ -140,7 +140,7 @@ textarea{min-height:220px;resize:vertical} button{cursor:pointer;border:none;bac
 <div class="g"><div class="c">
 <label>API Key (gateway)</label><input id="key" type="password" placeholder="API_KEY del .env"/>
 <label>Modelo</label><select id="model"><option value="auto">auto (fallback remoto)</option></select>
-<div class="r"><div><label>temperature</label><input id="temp" type="number" step="0.1" value="0"/></div><div><label>max_tokens</label><input id="max_tokens" type="number" value="512"/></div></div>
+<div class="r"><div><label>temperature</label><input id="temp" type="number" step="0.1" value="0"/></div><div><label>max_tokens</label><input id="max_tokens" type="number" value="2048"/></div></div>
 <div class="r" style="margin-top:10px"><button id="send">Enviar</button><button id="reload" style="background:#16233d;border:1px solid var(--l)">Refrescar</button></div>
 <label>Proveedores/cuentas activos</label><div id="providers"></div>
 <div class="meta">Base URLs: <code>/v1</code>, <code>/openai/v1</code>, <code>/api/v1</code>. Auth: <code>Authorization: Bearer</code>, <code>api-key</code>, <code>x-api-key</code>, <code>?key=</code>/<code>?api_key=</code>. Caché automática para peticiones determinísticas (<code>temperature=0</code>) o <code>cache:true</code>. Compresión automática al superar <code>CONTEXT_MAX_CHARS</code> o con <code>compress_context:true</code>.</div>
@@ -149,7 +149,7 @@ textarea{min-height:220px;resize:vertical} button{cursor:pointer;border:none;bac
 const $=id=>document.getElementById(id);
 async function api(path,opts={}){const key=$('key').value.trim();const h={'Content-Type':'application/json',...(opts.headers||{})}; if(key) h.Authorization='Bearer '+key; const r=await fetch(path,{...opts,headers:h}); const t=await r.text(); let d; try{d=JSON.parse(t)}catch{d=t} if(!r.ok) throw {status:r.status,data:d}; return d}
 async function load(){ $('out').textContent='Cargando...'; try{ const m=await api('/v1/models'); const s=$('model'),cur=s.value; s.innerHTML='<option value="auto">auto (fallback remoto)</option>'; for(const it of (m.data||[]).filter(x=>x.id!=='auto')){const o=document.createElement('option'); o.value=it.id; o.textContent=it.id; s.appendChild(o)} if([...s.options].some(o=>o.value===cur)) s.value=cur; const p=$('providers'); p.innerHTML=''; for(const it of (m.providers||[])){const sp=document.createElement('span'); sp.className='pill'; sp.innerHTML=`<span class="dot ${it.active?'on':''}"></span>${it.id}`; p.appendChild(sp)} $('out').textContent='OK. Usa /v1 como base URL OpenAI-compatible. temperature=0 habilita caché por defecto.' }catch(e){$('out').textContent=JSON.stringify(e,null,2)} }
-$('reload').onclick=load; $('send').onclick=async()=>{ $('out').textContent='Generando...'; try{ const d=await api('/v1/chat/completions',{method:'POST',body:JSON.stringify({model:$('model').value||'auto',messages:[{role:'user',content:$('prompt').value}],temperature:parseFloat($('temp').value||'0'),max_tokens:parseInt($('max_tokens').value||'512',10),cache:true,compress_context:true})}); $('out').textContent=(d?.choices?.[0]?.message?.content||JSON.stringify(d,null,2))+`\n\n---\nprovider=${d.provider||'?'} model=${d.model||'?'} cache=${JSON.stringify(d.gateway?.cache||{})} context=${JSON.stringify(d.gateway?.context||d.gateway?.context_compressed||false)}` }catch(e){$('out').textContent=JSON.stringify(e,null,2)} }; load();
+$('reload').onclick=load; $('send').onclick=async()=>{ $('out').textContent='Generando...'; try{ const d=await api('/v1/chat/completions',{method:'POST',body:JSON.stringify({model:$('model').value||'auto',messages:[{role:'user',content:$('prompt').value}],temperature:parseFloat($('temp').value||'0'),max_tokens:parseInt($('max_tokens').value||'2048',10),cache:true,compress_context:true})}); $('out').textContent=(d?.choices?.[0]?.message?.content||JSON.stringify(d,null,2))+`\n\n---\nprovider=${d.provider||'?'} model=${d.model||'?'} cache=${JSON.stringify(d.gateway?.cache||{})} context=${JSON.stringify(d.gateway?.context||d.gateway?.context_compressed||false)}` }catch(e){$('out').textContent=JSON.stringify(e,null,2)} }; load();
 </script></body></html>"""
 
 def _normalize_legacy_tools(body: dict[str, Any]) -> dict[str, Any]:
@@ -683,7 +683,7 @@ async def _decision(request: Request, _: bool = Depends(require_api_key_flexible
             {'role':'system','content':'Eres un motor de decisión robusto. Usa evidencia disponible, cita URLs cuando existan, separa hechos de inferencias, y declara incertidumbre/limitaciones. Responde útil, eficiente y verificable.'},
             {'role':'user','content': f"Objetivo: {objective}\n\nEvidencia recopilada:\n" + ("\n".join(evidence) if evidence else "(sin evidencia web/KB disponible; responde con cautela)") + "\n\nEntrega: decisión/recomendación, pasos, riesgos, fuentes."}
         ]
-    payload = {'model': raw.get('model') or 'auto', 'messages': messages, 'temperature': raw.get('temperature', 0.2), 'max_tokens': raw.get('max_tokens', 700), 'cache': raw.get('cache', False)}
+    payload = {'model': raw.get('model') or 'auto', 'messages': messages, 'temperature': raw.get('temperature', 0.2), 'max_tokens': raw.get('max_tokens', 4000), 'cache': raw.get('cache', False)}
     optimized = compress_messages(copy.deepcopy(payload))
     try:
         data, _ = await execute_with_fallback(optimized)
@@ -763,7 +763,7 @@ async def _project_generate(request: Request, _: bool = Depends(require_api_key_
         raise HTTPException(status_code=403, detail=_openai_error(f'FREE_ONLY blocks non-free model selection: {model}', type_='forbidden', code=403, request_id=getattr(request.state,'request_id','')))
     res = await _project_generate_one(
         prompt=prompt, name=name, model=model,
-        max_tokens=max(256, min(4000, int(body.get('max_tokens') or 1800))),
+        max_tokens=max(256, min(8192, int(body.get('max_tokens') or 4000))),
         temperature=float(body.get('temperature') or 0),
         max_retries=max(1, min(4, int(body.get('max_retries') or 2))),
         retry_delay_s=max(0, min(180, float(body.get('retry_delay_s') or 55))),
