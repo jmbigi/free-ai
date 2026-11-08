@@ -303,7 +303,7 @@ async def health():
             "chat": ["POST /v1/chat/completions"],
             "responses": ["POST /v1/responses"],
             "models": ["GET /v1/models"],
-            "observability": ["GET /readyz", "GET /v1/metrics", "GET /v1/audit", "GET /v1/status", "GET /v1/free"],
+            "observability": ["GET/POST /readyz", "GET/POST /v1/metrics", "GET/POST /v1/audit", "GET/POST /v1/status", "GET/POST /v1/free"], "embeddings": ["POST /v1/embeddings (501 honest if no upstream configured)"], "agent": ["POST /v1/search", "POST /v1/decision", "GET/POST /v1/knowledge/*"],
         },
         "notes": [
             "Gratis/controlado (FREE_ONLY) ≠ ilimitado: proveedores aplican cuotas/rate limits/créditos/capacidad.",
