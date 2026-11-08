@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from .router import execute_with_fallback
 from .config import settings
+from .logging import log as _log
 
 FILE_RE = re.compile(
     r'(?:^|\n)(?:### FILE:|## (?:Archivo|File)(?: \d+)?:|\*\*FILE:\*?\*?)\s*`?([^`\n]+?)`?\s*\*?\*?\s*\n```[^\n]*\n(.*?)```',
@@ -147,8 +148,8 @@ async def generate_one(*, prompt: str, name: str, model: str = 'auto', max_token
     base = Path(tempfile.mkdtemp(prefix='ft-ia-project-', dir=str(base_parent)))
     try:
         os.chmod(base, 0o700)
-    except Exception:
-        pass
+    except OSError as e:
+        _log.warning("could not chmod temp project dir %s: %s", base, e)
     safe_name = re.sub(r'[^a-zA-Z0-9._-]+', '-', (name or 'project').strip())[:80] or 'project'
     outdir = base / safe_name
     outdir.mkdir(parents=True, exist_ok=True)

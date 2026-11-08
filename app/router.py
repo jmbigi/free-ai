@@ -90,8 +90,8 @@ def _record(pid: str, *, ok: bool, ms: int | None = None, error: str = ""):
             "last_error": s.get("last_error") or "",
             "latency_ms": s.get("latency_ms"), "ema_ms": s.get("ema_ms"),
         })
-    except Exception:
-        pass
+    except Exception as e:
+        _log.warning("metrics.update_provider_stats(%s) failed: %s", pid, e)
 
 
 def runtime_status() -> dict[str, Any]:
@@ -238,8 +238,8 @@ def _cooldown_for(exc: Exception) -> float:
     if ra is not None:
         try:
             return max(1.0, float(ra))
-        except Exception:
-            pass
+        except (TypeError, ValueError) as e:
+            _log.debug("invalid Retry-After value %r: %s", ra, e)
     if 'pollinations' in msg and ('45 seconds' in msg or 'free limit' in msg or 'every 45' in msg or 'rate limit' in msg):
         return 46.0
     if 'pollinations' in msg and status in (500, 502, 503, 504):
@@ -447,8 +447,10 @@ async def stream_with_fallback(payload: dict[str, Any]) -> AsyncIterator[bytes]:
         if _cooldown_left(m.id) > 15:
             continue
         t0 = time.time()
+        yielded = False
         try:
             async for chunk in p.stream_chat(payload, m):
+                yielded = True
                 yield chunk
             _record(p.id, ok=True, ms=int((time.time() - t0) * 1000))
             return
@@ -461,5 +463,10 @@ async def stream_with_fallback(payload: dict[str, Any]) -> AsyncIterator[bytes]:
             )
             _mark_cooldown(m.id, _cooldown_for(e))
             _record(p.id, ok=False, ms=int((time.time() - t0) * 1000), error=err)
+            if yielded:
+                raise ProviderError(
+                    f"Stream interrupted after partial output from {m.id}; not retrying to avoid mixed responses: {err}",
+                    status=502, provider=p.id,
+                ) from e
             continue
     raise ProviderError("Streaming fallback agotado: " + " | ".join(errors[-4:]), status=502, provider="gateway")

@@ -72,6 +72,48 @@ def _scrub_text(text: str) -> tuple[str, int]:
     return text, count
 
 
+def _scrub_tool_calls(tool_calls: Any) -> tuple[Any, int]:
+    if not isinstance(tool_calls, list):
+        return tool_calls, 0
+    total = 0
+    out = []
+    for tc in tool_calls:
+        if not isinstance(tc, dict):
+            out.append(tc)
+            continue
+        item = dict(tc)
+        fn = item.get("function")
+        if isinstance(fn, dict):
+            fn = dict(fn)
+            if isinstance(fn.get("arguments"), str):
+                fn["arguments"], n = _scrub_text(fn["arguments"])
+                total += n
+            item["function"] = fn
+        out.append(item)
+    return out, total
+
+
+def _scrub_value(value: Any) -> tuple[Any, int]:
+    if isinstance(value, str):
+        return _scrub_text(value)
+    if isinstance(value, dict):
+        total = 0
+        out = {}
+        for k, v in value.items():
+            out[k], n = _scrub_value(v)
+            total += n
+        return out, total
+    if isinstance(value, list):
+        total = 0
+        out = []
+        for v in value:
+            sv, n = _scrub_value(v)
+            out.append(sv)
+            total += n
+        return out, total
+    return value, 0
+
+
 def scrub_messages(messages: Any) -> tuple[Any, int]:
     """Redact secrets/PII from a messages list. Returns (scrubbed, total_redactions)."""
     if not isinstance(messages, list):
@@ -96,6 +138,15 @@ def scrub_messages(messages: Any) -> tuple[Any, int]:
                     total += n
                 new_parts.append(part)
             mm["content"] = new_parts
+        if "tool_calls" in mm:
+            mm["tool_calls"], n = _scrub_tool_calls(mm["tool_calls"])
+            total += n
+        fc = mm.get("function_call")
+        if isinstance(fc, dict) and isinstance(fc.get("arguments"), str):
+            fc = dict(fc)
+            fc["arguments"], n = _scrub_text(fc["arguments"])
+            total += n
+            mm["function_call"] = fc
         out.append(mm)
     return out, total
 
@@ -110,5 +161,11 @@ def scrub_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], int]:
         n += n2
     if isinstance(p.get("input"), str):
         p["input"], n2 = _scrub_text(p["input"])
+        n += n2
+    if isinstance(p.get("user"), str):
+        p["user"], n2 = _scrub_text(p["user"])
+        n += n2
+    if isinstance(p.get("metadata"), (dict, list)):
+        p["metadata"], n2 = _scrub_value(p["metadata"])
         n += n2
     return p, n

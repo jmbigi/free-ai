@@ -4,6 +4,8 @@ import re
 import uuid
 from typing import Any
 
+from .logging import log as _log
+
 TOOL_SYSTEM = (
     "Gateway compatibility layer: if you need to call a tool/function, respond with ONLY a JSON object: "
     "{\"tool_calls\":[{\"id\":\"call_x\",\"type\":\"function\",\"function\":{\"name\":\"NAME\",\"arguments\":\"{...json...}\"}}]} . "
@@ -41,8 +43,8 @@ def _parse_json_candidate(s: str) -> Any:
         return None
     try:
         return json.loads(s)
-    except Exception:
-        pass
+    except json.JSONDecodeError as e:
+        _log.debug("tool-call JSON parse failed, trying embedded object: %s", e)
     # fenced or embedded object
     m = re.search(r'\{[\s\S]*\}', s)
     if m:

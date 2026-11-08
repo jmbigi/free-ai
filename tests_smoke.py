@@ -84,10 +84,16 @@ ok('metrics endpoint', c.get('/v1/metrics', headers=AUTH).status_code == 200)
 ok('status endpoint', c.get('/v1/status', headers=AUTH).status_code == 200)
 ok('free endpoint', c.get('/v1/free', headers=AUTH).status_code == 200)
 ok('providers endpoint', c.get('/v1/providers', headers=AUTH).status_code == 200)
-ok('tools endpoint', c.get('/v1/tools').status_code == 200)
-ok('telemetry endpoint', c.get('/v1/telemetry').status_code == 200)
-ok('debug endpoint', c.get('/v1/debug').status_code == 200)
-ok('connections endpoint', c.get('/v1/connections').status_code == 200)
+ok('tools endpoint', c.get('/v1/tools', headers=AUTH).status_code == 200)
+ok('tools endpoint needs auth', c.get('/v1/tools').status_code in (401, 403))
+ok('telemetry endpoint', c.get('/v1/telemetry', headers=AUTH).status_code == 200)
+ok('telemetry needs auth', c.get('/v1/telemetry').status_code in (401, 403))
+ok('debug endpoint', c.get('/v1/debug', headers=AUTH).status_code == 200)
+ok('debug needs auth', c.get('/v1/debug').status_code in (401, 403))
+ok('connections endpoint', c.get('/v1/connections', headers=AUTH).status_code == 200)
+ok('connections needs auth', c.get('/v1/connections').status_code in (401, 403))
+conn = c.get('/v1/connections', headers=AUTH).json()
+ok('connections no client IP leak', 'top_clients' not in conn and 'unique_clients' in conn)
 
 # --- v1 root + aliases ---
 ok('v1 root', c.get('/v1', headers=AUTH).status_code == 200)
@@ -102,5 +108,26 @@ if scrub.status_code == 200:
     ok('scrub metadata present', 'scrubbed' in gw and gw['scrubbed'].get('secrets_pii_redacted', 0) > 0)
 else:
     print(f"WARN: scrub probe skipped (upstream rate-limited, status={scrub.status_code})")
+
+# --- PII scrub covers tool_call arguments ---
+from app.pii_scrub import scrub_payload
+scrubbed, scount = scrub_payload({'messages': [{'role': 'assistant', 'tool_calls': [{'function': {'name': 'send', 'arguments': '{"token":"sk-abc123def456ghi789"}'}}]}]})
+blob = str(scrubbed)
+ok('scrub tool_calls arguments', scount >= 1 and 'sk-abc123def456ghi789' not in blob)
+
+# --- Invalid numeric params must not 500 ---
+ok('kb bad n no 500', c.get('/v1/knowledge/search?q=x&n=abc', headers=AUTH).status_code == 200)
+ok('search bad n no 500', c.get('/v1/search?q=x&n=abc&provider=nope', headers=AUTH).status_code == 200)
+
+# --- Query-key log redaction ---
+import logging as _logging
+from app.logging import _RedactQueryFilter
+rec = _logging.LogRecord('uvicorn.access', _logging.INFO, __file__, 1, 'GET /v1/models?key=secret123 HTTP/1.1', (), None)
+_RedactQueryFilter().filter(rec)
+ok('log query key redacted', 'secret123' not in rec.getMessage() and '[REDACTED]' in rec.getMessage())
+
+rec2 = _logging.LogRecord('uvicorn.access', _logging.INFO, __file__, 1, '%s - "%s %s HTTP/%s" %d', ('127.0.0.1:1', 'GET', '/v1/models?key=secret456', '1.1', 401), None)
+_RedactQueryFilter().filter(rec2)
+ok('log tuple args preserved', len(rec2.args) == 5 and 'secret456' not in rec2.getMessage() and '[REDACTED]' in rec2.getMessage())
 
 print('ALL PASS')

@@ -48,8 +48,9 @@ class OpenRouterProvider(_S):
                             caps.append('tools')
                         from .base import ModelInfo
                         base.append(ModelInfo(id=f"{self.id}/{mid}", provider=self.id, owned_by=(m.get('owned_by') or self.id), upstream_model=mid, capabilities=caps, note='OpenRouter :free discovered from /models (quota/rate limits/capacity vary).'))
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.getLogger("free-ai.providers").warning("OpenRouter :free discovery failed: %s", e)
         return base
 
     default_models = [

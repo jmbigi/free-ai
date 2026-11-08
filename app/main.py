@@ -202,10 +202,32 @@ def _normalize_legacy_tools(body: dict[str, Any]) -> dict[str, Any]:
         body['messages'] = out
     return body
 
+def _messages_chars(messages: Any) -> int:
+    if not isinstance(messages, list):
+        return 0
+    return sum(len(str(m.get("content", ""))) for m in messages if isinstance(m, dict))
+
+
+def _as_int(value: Any, default: int, lo: int, hi: int) -> int:
+    try:
+        return max(lo, min(hi, int(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: Any, default: float, lo: float, hi: float) -> float:
+    try:
+        return max(lo, min(hi, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
 def _normalize_payload(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail=_openai_error("Body must be a JSON object", type_="invalid_request_error", code=400))
     body = dict(payload)
+    if not isinstance(body.get("gateway"), dict):
+        body.pop("gateway", None)
     body.setdefault("model", "auto")
     if "max_completion_tokens" in body and "max_tokens" not in body:
         body["max_tokens"] = body.get("max_completion_tokens")
@@ -292,7 +314,8 @@ async def health():
     providers = []
     for p in __import__('app.router', fromlist=['_instances'])._instances():
         st = rt.get('stats', {}).get(p.id, {})
-        providers.append({"id": p.id, "label": p.label, "active": p.available(), "always_on": p.id == "pollinations", "stats": st})
+        public_stats = {k: st.get(k) for k in ("ok", "fail", "last_ok", "last_fail", "latency_ms", "ema_ms")}
+        providers.append({"id": p.id, "label": p.label, "active": p.available(), "always_on": p.id == "pollinations", "stats": public_stats})
     active = [p["id"] for p in providers if p.get("active")]
     return {
         "status": "ok",
@@ -364,8 +387,9 @@ async def _status_response(_: bool = Depends(require_api_key_flexible)):
         "version": app.version,
         "service": "free-ai-gateway",
         "public_access": {
-            "direct_base_url": "http://109.123.248.91:8000/v1",
-            "recommended": "Use HTTPS reverse proxy (deploy/apache-free-ai-gateway.conf + DNS + certbot).",
+            "public_base_url": settings.public_base_url + "/v1",
+            "direct_local_base_url": "http://127.0.0.1:8000/v1",
+            "recommended": "Use HTTPS reverse proxy (deploy/ia.forthtrade.com.conf + DNS + certbot).",
             "limitation": "Port 8000 may be blocked by provider/VPS firewall; free upstream tiers have quotas/rate limits/credits.",
         },
         "active_providers": active,
@@ -473,11 +497,7 @@ async def _chat(request: Request, _: bool = Depends(require_api_key_flexible)):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
     payload = _normalize_payload(raw)
-    before_chars = 0
-    try:
-        before_chars = sum(len(str(m.get('content',''))) for m in (payload.get('messages') or []) if isinstance(m, dict))
-    except Exception:
-        pass
+    before_chars = _messages_chars(payload.get('messages'))
     # Scrub secrets/PII BEFORE cache-keying and BEFORE any upstream egress.
     # The scrubbed payload is what gets cached and sent; redaction count is reported in metadata.
     payload, scrub_count = scrub_payload(payload)
@@ -598,11 +618,7 @@ async def _responses(request: Request, _: bool = Depends(require_api_key_flexibl
     if not chat.get('stream'):
         chat['stream'] = False
         # reuse chat handler logic by normalizing through _chat internals: call execute path
-        before_chars = 0
-        try:
-            before_chars = sum(len(str(m.get('content',''))) for m in (chat.get('messages') or []) if isinstance(m, dict))
-        except Exception:
-            pass
+        before_chars = _messages_chars(chat.get('messages'))
         chat, scrub_count = scrub_payload(chat)
         optimized = compress_messages(copy.deepcopy(chat))
         payload_for_cache = copy.deepcopy(optimized)
@@ -645,27 +661,37 @@ for path in ['/v1/responses','/responses','/openai/v1/responses']:
 
 
 async def _search(request: Request, _: bool = Depends(require_api_key_flexible)):
-    try: raw = await request.json() if request.method == 'POST' else {}
-    except Exception: raw = {}
     if request.method == 'GET':
         q = request.query_params.get('q') or request.query_params.get('query') or ''
         provider = request.query_params.get('provider') or 'auto'
-        n = request.query_params.get('max_results') or request.query_params.get('n') or '5'
-        return await web_search(q, max_results=int(n), provider=provider)
-    q = (raw.get('query') or raw.get('q') or raw.get('search') or '') if isinstance(raw, dict) else ''
-    provider = (raw.get('provider') or 'auto') if isinstance(raw, dict) else 'auto'
-    n = (raw.get('max_results') or raw.get('n') or 5) if isinstance(raw, dict) else 5
-    return await web_search(str(q), max_results=int(n), provider=str(provider))
+        n = request.query_params.get('max_results') or request.query_params.get('n') or 5
+        return await web_search(q, max_results=_as_int(n, 5, 1, 10), provider=provider)
+    try:
+        raw = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail=_openai_error('Invalid JSON body', type_='invalid_request_error', code=400))
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail=_openai_error('Body must be a JSON object', type_='invalid_request_error', code=400))
+    q = raw.get('query') or raw.get('q') or raw.get('search') or ''
+    provider = raw.get('provider') or 'auto'
+    n = raw.get('max_results') or raw.get('n') or 5
+    return await web_search(str(q), max_results=_as_int(n, 5, 1, 10), provider=str(provider))
 
 for path in ['/v1/search','/search','/v1/tools/search','/openai/v1/search']:
     app.add_api_route(path, _search, methods=['GET','POST'], dependencies=[Depends(require_api_key_flexible)])
 
 async def _kb_search(request: Request, _: bool = Depends(require_api_key_flexible)):
     if request.method == 'GET':
-        q = request.query_params.get('q') or ''; n = request.query_params.get('n') or '5'; return kb_query(q, limit=int(n))
-    try: raw = await request.json()
-    except Exception: raw = {}
-    return kb_query(str((raw or {}).get('query') or (raw or {}).get('q') or ''), limit=int((raw or {}).get('limit') or (raw or {}).get('n') or 5))
+        q = request.query_params.get('q') or ''
+        n = request.query_params.get('n') or 5
+        return kb_query(q, limit=_as_int(n, 5, 1, 20))
+    try:
+        raw = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail=_openai_error('Invalid JSON body', type_='invalid_request_error', code=400))
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail=_openai_error('Body must be a JSON object', type_='invalid_request_error', code=400))
+    return kb_query(str(raw.get('query') or raw.get('q') or ''), limit=_as_int(raw.get('limit') or raw.get('n') or 5, 5, 1, 20))
 
 async def _kb_add(request: Request, _: bool = Depends(require_api_key_flexible)):
     try: raw = await request.json()
@@ -692,7 +718,7 @@ async def _decision(request: Request, _: bool = Depends(require_api_key_flexible
     evidence = []
     search_result = None
     if do_search:
-        search_result = await web_search(objective, max_results=int(raw.get('max_results') or 5), provider=str(raw.get('search_provider') or 'auto'))
+        search_result = await web_search(objective, max_results=_as_int(raw.get('max_results') or 5, 5, 1, 10), provider=str(raw.get('search_provider') or 'auto'))
         for r in (search_result.get('results') or [])[:5]:
             evidence.append(f"- {r.get('title','')}\n  {r.get('url','')}\n  {str(r.get('snippet',''))[:500]}")
             try: kb_add(title=r.get('title') or objective[:80], url=r.get('url') or '', content=r.get('snippet') or '', tags=['search','decision'], source='web-search', meta={'objective': objective[:200]})
@@ -708,7 +734,7 @@ async def _decision(request: Request, _: bool = Depends(require_api_key_flexible
             {'role':'system','content':'Eres un motor de decisión robusto. Usa evidencia disponible, cita URLs cuando existan, separa hechos de inferencias, y declara incertidumbre/limitaciones. Responde útil, eficiente y verificable.'},
             {'role':'user','content': f"Objetivo: {objective}\n\nEvidencia recopilada:\n" + ("\n".join(evidence) if evidence else "(sin evidencia web/KB disponible; responde con cautela)") + "\n\nEntrega: decisión/recomendación, pasos, riesgos, fuentes."}
         ]
-    payload = {'model': raw.get('model') or 'auto', 'messages': messages, 'temperature': raw.get('temperature', 0.2), 'max_tokens': raw.get('max_tokens', 4000), 'cache': raw.get('cache', False)}
+    payload = {'model': raw.get('model') or 'auto', 'messages': messages, 'temperature': _as_float(raw.get('temperature', 0.2), 0.2, 0.0, 2.0), 'max_tokens': _as_int(raw.get('max_tokens', 4000), 4000, 1, 8192), 'cache': raw.get('cache', False)}
     optimized = compress_messages(copy.deepcopy(payload))
     try:
         data, _ = await execute_with_fallback(optimized)
@@ -734,7 +760,7 @@ async def v1_root(_: bool = Depends(require_api_key_flexible)):
 @app.get("/v1/tools")
 @app.get("/openai/v1/tools")
 @app.get("/api/v1/tools")
-async def tools_list(request: Request):
+async def tools_list(request: Request, _: bool = Depends(require_api_key_flexible)):
     """List all standard OpenAI-compatible tool definitions."""
     from .tools import get_all_tool_definitions
     all_tools = get_all_tool_definitions()
@@ -749,7 +775,7 @@ async def tools_list(request: Request):
 @app.get("/v1/telemetry")
 @app.get("/telemetry")
 @app.get("/openai/v1/telemetry")
-async def telemetry_response():
+async def telemetry_response(_: bool = Depends(require_api_key_flexible)):
     from .telemetry import telemetry
     return await telemetry()
 
@@ -757,14 +783,14 @@ async def telemetry_response():
 @app.get("/v1/connections")
 @app.get("/connections")
 @app.get("/openai/v1/connections")
-async def connections_response():
+async def connections_response(_: bool = Depends(require_api_key_flexible)):
     return metrics.snapshot()
 
 
 @app.get("/v1/debug")
 @app.get("/debug")
 @app.get("/openai/v1/debug")
-async def debug_response():
+async def debug_response(_: bool = Depends(require_api_key_flexible)):
     from .telemetry import telemetry
     t = await telemetry()
     return {
@@ -795,10 +821,10 @@ async def _project_generate(request: Request, _: bool = Depends(require_api_key_
         raise HTTPException(status_code=403, detail=_openai_error(f'FREE_ONLY blocks non-free model selection: {model}', type_='forbidden', code=403, request_id=getattr(request.state,'request_id','')))
     res = await _project_generate_one(
         prompt=prompt, name=name, model=model,
-        max_tokens=max(256, min(8192, int(body.get('max_tokens') or 4000))),
-        temperature=float(body.get('temperature') or 0),
-        max_retries=max(1, min(4, int(body.get('max_retries') or 2))),
-        retry_delay_s=max(0, min(180, float(body.get('retry_delay_s') or 55))),
+        max_tokens=_as_int(body.get('max_tokens') or 4000, 4000, 256, 8192),
+        temperature=_as_float(body.get('temperature') or 0, 0.0, 0.0, 2.0),
+        max_retries=_as_int(body.get('max_retries') or 2, 2, 1, 4),
+        retry_delay_s=_as_float(body.get('retry_delay_s') or 55, 55.0, 0.0, 180.0),
         keep_temp=bool(body.get('keep_temp') or False),
     )
     return {'object':'project_generation','status':'ok' if res.get('ok') else 'failed','time':int(time.time()), **res}

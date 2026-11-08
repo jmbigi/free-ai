@@ -1,4 +1,4 @@
-# Free AI Gateway (v2.2)
+# Free AI Gateway (v2.3.0)
 
 Gateway **OpenAI-compatible**, público y robusto, con **una sola API key** del gateway (`FT_AI_API_KEY` / `API_KEY` en `.env`). Agrega proveedores gratuitos/free-tier configurables, usa `model="auto"` con fallback inteligente, caché, compresión de contexto, control **FREE_ONLY** y observabilidad.
 
@@ -25,7 +25,7 @@ curl -sS https://ia.forthtrade.com/v1/chat/completions \
 - `GET /v1/models`, `/v1/providers` — catálogo/estado (auth).
 - `POST /v1/chat/completions` — chat OpenAI-compatible (auth).
 - `POST /v1/responses` — compatibilidad básica Responses API (auth).
-- `GET /v1/metrics`, `/v1/audit`, `/v1/status`, `/v1/free`, `/v1/cache` — observabilidad/auditoría (auth).
+- `GET /v1/metrics`, `/v1/audit`, `/v1/status`, `/v1/free`, `/v1/cache`, `/v1/telemetry`, `/v1/debug`, `/v1/connections`, `/v1/tools` — observabilidad/auditoría (auth). No exponen IPs de clientes.
 
 ## Auth (gateway)
 Una sola clave: `.env` `API_KEY` o `FT_AI_API_KEY`. Acepta `Authorization: Bearer`, `api-key`, `x-api-key`, `?api_key/key`. **No** enviar claves upstream a clientes. Rotar si se expone.

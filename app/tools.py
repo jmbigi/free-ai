@@ -1,12 +1,19 @@
 from __future__ import annotations
 import inspect
+import ipaddress
 import json
+import os
 import re
+import socket
 from pathlib import Path
 from typing import Any, AsyncIterator
+from urllib.parse import urlparse
 
 from .logging import log as _log
 from .observability import metrics as _metrics
+
+_ALLOWED_ROOT = Path(os.getenv("GATEWAY_TOOLS_ROOT", "/tmp")).resolve()
+_ALLOW_LOCAL_EXEC = os.getenv("GATEWAY_ALLOW_LOCAL_EXEC", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
 STANDARD_TOOLS = [
@@ -94,22 +101,18 @@ def inject_tools_system_prompt(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _safe_path(path: str, *, must_exist: bool = False, is_dir: bool = False) -> Path | None:
-    """Resolve path safely. Reject traversal outside allowed root."""
+    """Resolve path safely: relative to GATEWAY_TOOLS_ROOT and never outside it."""
     if not isinstance(path, str) or not path.strip():
         return None
     p = Path(path.strip())
-    if not path.strip():
-        return None
     try:
-        resolved = p.resolve()
-    except Exception:
+        resolved = p.resolve() if p.is_absolute() else (_ALLOWED_ROOT / p).resolve()
+        resolved.relative_to(_ALLOWED_ROOT)
+    except (OSError, ValueError):
         return None
-    if not is_dir and must_exist:
-        if not resolved.exists():
-            return None
-    if resolved.is_relative_to(Path("/tmp")) or resolved.is_relative_to(Path("/home")):
-        return resolved
-    return None
+    if not is_dir and must_exist and not resolved.exists():
+        return None
+    return resolved
 
 
 def _read_file(args: dict[str, Any]) -> dict[str, Any]:
@@ -146,7 +149,7 @@ def _edit_file(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _list_dir(args: dict[str, Any]) -> dict[str, Any]:
-    path = _safe_path(str(args.get("path") or "") or ".", is_dir=True) or Path("/tmp")
+    path = _safe_path(str(args.get("path") or "") or ".", is_dir=True) or _ALLOWED_ROOT
     if not path.is_dir():
         return {"status": "error", "error": f"not a directory: {path}"}
     out = []
@@ -160,11 +163,13 @@ def _list_dir(args: dict[str, Any]) -> dict[str, Any]:
 
 def _run_bash(args: dict[str, Any]) -> dict[str, Any]:
     import subprocess
+    if not _ALLOW_LOCAL_EXEC:
+        return {"status": "error", "error": "local execution disabled; set GATEWAY_ALLOW_LOCAL_EXEC=1 to opt in"}
     cmd = str(args.get("command") or "")
     if not cmd.strip():
         return {"status": "error", "error": "empty command"}
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30, cwd="/tmp")
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30, cwd=str(_ALLOWED_ROOT))
         out = (r.stdout or "")[:12000]
         err = (r.stderr or "")[:4000]
         return {"status": "ok", "returncode": r.returncode, "stdout": out, "stderr": err}
@@ -173,7 +178,7 @@ def _run_bash(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _grep(args: dict[str, Any]) -> dict[str, Any]:
-    path = _safe_path(str(args.get("path") or "/tmp") or "/tmp", is_dir=True) or Path("/tmp")
+    path = _safe_path(str(args.get("path") or "") or ".", is_dir=True) or _ALLOWED_ROOT
     pattern = re.compile(str(args.get("pattern") or ".*"))
     hits = []
     for p in path.rglob("*"):
@@ -181,8 +186,8 @@ def _grep(args: dict[str, Any]) -> dict[str, Any]:
             try:
                 if len(list(pattern.finditer(p.read_text(encoding="utf-8", errors="replace")))) > 0:
                     hits.append(str(p))
-            except Exception:
-                pass
+            except (OSError, UnicodeError) as e:
+                _log.debug("grep skipped %s: %s", p, e)
     return {"status": "ok", "path": str(path), "count": len(hits), "files": hits[:50]}
 
 
@@ -192,16 +197,56 @@ async def _web_search(args: dict[str, Any]) -> dict[str, Any]:
     return {"status": "ok", "object": res.get("object"), "provider": res.get("provider"), "count": len(res.get("results") or []), "error": res.get("error") or None, "results": res.get("results") or []}
 
 
+def _is_public_host(host: str) -> bool:
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError as e:
+        _log.warning("web_fetch DNS resolution failed for %s: %s", host, e)
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            return False
+    return True
+
+
+def _validate_public_url(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("only http/https URLs are allowed")
+    if not parsed.hostname:
+        raise ValueError("URL must include a hostname")
+    if not _is_public_host(parsed.hostname):
+        raise ValueError("URL host resolves to a private/reserved address (SSRF blocked)")
+    return url
+
+
 def _web_fetch(args: dict[str, Any]) -> dict[str, Any]:
     url = str(args.get("url") or "")
     try:
         import httpx
         from .search import _cache_get, _cache_set
+        _validate_public_url(url)
         cached = _cache_get("web_fetch|" + url, ttl=60)
         if cached:
             return {"status": "ok", "cached": True, **cached}
-        with httpx.Client(timeout=15, follow_redirects=True) as c:
-            r = c.get(url, headers={"User-Agent": "FreeAIGateway/2.2"})
+        with httpx.Client(timeout=15, follow_redirects=False) as c:
+            current = url
+            r = None
+            for _ in range(5):
+                _validate_public_url(current)
+                r = c.get(current, headers={"User-Agent": "FreeAIGateway/2.3"})
+                location = r.headers.get("location")
+                if not r.is_redirect or not location:
+                    break
+                current = str(r.url.join(location))
+            else:
+                raise ValueError("too many redirects")
+            if r is None:
+                raise ValueError("empty response")
             text = r.text[:30000]
         out = {"status": "ok", "url": url, "content": text, "final_url": str(r.url)}
         _cache_set("web_fetch|" + url, out)
@@ -211,10 +256,12 @@ def _web_fetch(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def _python_exec(args: dict[str, Any]) -> dict[str, Any]:
+    import subprocess
+    if not _ALLOW_LOCAL_EXEC:
+        return {"status": "error", "error": "local execution disabled; set GATEWAY_ALLOW_LOCAL_EXEC=1 to opt in"}
     code = str(args.get("code") or "")
     try:
-        import subprocess, json as _json
-        r = subprocess.run(["python", "-c", code], capture_output=True, text=True, timeout=30, cwd="/tmp")
+        r = subprocess.run(["python", "-c", code], capture_output=True, text=True, timeout=30, cwd=str(_ALLOWED_ROOT))
         return {"status": "ok", "returncode": r.returncode, "stdout": (r.stdout or "")[:12000], "stderr": (r.stderr or "")[:4000]}
     except Exception as e:
         return {"status": "error", "error": str(e)}

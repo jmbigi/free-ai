@@ -1,24 +1,41 @@
 from __future__ import annotations
-import hmac, secrets, os
+import hmac, secrets, os, threading
 from pathlib import Path
 from fastapi import Header, HTTPException, Query, Request
 from dotenv import dotenv_values
 from .config import settings, _env
 from .logging import log as _log
 
+_KEY_NAMES = ("API_KEY", "FT_AI_API_KEY", "FTAI_API_KEY", "FREE_AI_API_KEY", "GATEWAY_API_KEY")
+_KEY_CACHE_LOCK = threading.Lock()
+_KEY_CACHE: tuple[int, int, str] | None = None
+
 
 def _expected_key() -> str:
-    vals = {}
+    """Resolve gateway key, caching .env parsing by mtime/size (rotations still picked up)."""
+    global _KEY_CACHE
     try:
-        vals = dotenv_values(_env)
-    except Exception as e:
-        _log.warning("dotenv_values failed: %s", e)
+        st = _env.stat()
+        fingerprint = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        fingerprint = (-1, -1)
+    with _KEY_CACHE_LOCK:
+        if _KEY_CACHE and _KEY_CACHE[0] == fingerprint[0] and _KEY_CACHE[1] == fingerprint[1]:
+            return _KEY_CACHE[2]
         vals = {}
-    for k in ("API_KEY","FT_AI_API_KEY","FTAI_API_KEY","FREE_AI_API_KEY","GATEWAY_API_KEY"):
-        v = vals.get(k) or os.getenv(k) or settings.api_key
-        if v:
-            return str(v).strip().strip("'\"")
-    return ""
+        try:
+            vals = dotenv_values(_env)
+        except Exception as e:
+            _log.warning("dotenv_values failed: %s", e)
+            vals = {}
+        key = ""
+        for k in _KEY_NAMES:
+            v = vals.get(k) or os.getenv(k) or settings.api_key
+            if v:
+                key = str(v).strip().strip("'\"")
+                break
+        _KEY_CACHE = (fingerprint[0], fingerprint[1], key)
+        return key
 
 
 def _extract_token(request: Request, authorization: str | None, headers: dict[str, str], query: dict[str, str]) -> str | None:

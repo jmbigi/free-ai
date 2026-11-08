@@ -137,6 +137,9 @@ def _preserve_message(m: dict[str, Any], msg_max: int, compress_text: bool = Tru
 def compress_messages(payload: dict[str, Any]) -> dict[str, Any]:
     if not bool(getattr(settings, 'context_compress_enabled', True)):
         return payload
+    if not isinstance(payload.get("gateway"), dict):
+        payload = dict(payload)
+        payload.pop("gateway", None)
     gw = payload.get("gateway") if isinstance(payload.get("gateway"), dict) else {}
     if payload.get("compress_context") is False or gw.get("compress_context") is False:
         return payload

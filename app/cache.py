@@ -109,12 +109,19 @@ def cache_key(payload: dict[str, Any]) -> str:
         "messages": normalize_messages(payload.get("messages")),
         "temperature": payload.get("temperature", 1),
         "top_p": payload.get("top_p"),
+        "n": payload.get("n"),
         "max_tokens": payload.get("max_tokens"),
+        "frequency_penalty": payload.get("frequency_penalty"),
+        "presence_penalty": payload.get("presence_penalty"),
+        "logit_bias": payload.get("logit_bias"),
         "tools": payload.get("tools"),
         "tool_choice": payload.get("tool_choice"),
+        "parallel_tool_calls": payload.get("parallel_tool_calls"),
         "response_format": payload.get("response_format"),
+        "reasoning_effort": payload.get("reasoning_effort"),
         "seed": payload.get("seed"),
         "stop": payload.get("stop"),
+        "user": payload.get("user"),
     }
     raw = json.dumps(relevant, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()

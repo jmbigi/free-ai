@@ -144,7 +144,7 @@ class Metrics:
                 },
                 'by_status': dict(sorted(self.by_status.items())),
                 'top_paths': dict(sorted(self.by_path.items(), key=lambda kv: -kv[1])[:30]),
-                'top_clients': dict(sorted(self.by_client_ip.items(), key=lambda kv: -kv[1])[:20]),
+                'unique_clients': len(self.by_client_ip),
                 'last_errors': list(self.last_errors)[-10:],
                 'providers': self.provider_stats,
             }
