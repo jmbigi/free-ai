@@ -1,6 +1,4 @@
 # Template for post-certbot HTTPS vhost (certbot may generate similar file).
-LogFormat "%h %l %u %t \"%m %U %H\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"" gateway_redacted
-
 <VirtualHost *:443>
     ServerName ia.forthtrade.com
 
@@ -20,5 +18,5 @@ LogFormat "%h %l %u %t \"%m %U %H\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"" g
     Header always set Referrer-Policy "strict-origin-when-cross-origin"
 
     ErrorLog /var/log/httpd/ia-forthtrade-gateway-ssl-error.log
-    CustomLog /var/log/httpd/ia-forthtrade-gateway-ssl-access.log gateway_redacted
+    CustomLog /var/log/httpd/ia-forthtrade-gateway-ssl-access.log "%h %l %u %t \"%m %U %H\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\""
 </VirtualHost>
