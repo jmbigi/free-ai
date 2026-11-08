@@ -1,0 +1,22 @@
+# NCM-Instruct-725M local fallback (OpenAI-compatible, loopback only).
+# Requires the model checkout at %h/ncm/instruct/hf-WB-catboy-NCM-Instruct-725M
+# and its Python env at %h/ncm/.venv (see docs/progress/2026-11-08-ncm-local-fallback.md).
+# Install: cp deploy/ncm-instruct.service.example ~/.config/systemd/user/ncm-instruct.service
+#          systemctl --user daemon-reload && systemctl --user enable --now ncm-instruct.service
+
+[Unit]
+Description=NCM-Instruct 725M local fallback (OpenAI-compatible)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ncm/instruct/hf-WB-catboy-NCM-Instruct-725M
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/ncm/.venv/bin/python -m uvicorn ncm_server:app --host 127.0.0.1 --port 11435
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

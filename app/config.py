@@ -145,6 +145,76 @@ class SettingsProxy:
     def free_tier_max_wait(self) -> int:
         return max(1, _read_int("FREE_TIER_MAX_WAIT", 60))
 
+    # Fallback budget / circuit breaker (anti-blocking, anti-loop).
+    @property
+    def request_budget(self) -> int:
+        return max(5, _read_int("REQUEST_BUDGET", 45))
+
+    @property
+    def stream_start_budget(self) -> int:
+        return max(2, _read_int("STREAM_START_BUDGET", 12))
+
+    @property
+    def provider_breaker_threshold(self) -> int:
+        return max(1, _read_int("PROVIDER_BREAKER_THRESHOLD", 3))
+
+    @property
+    def provider_breaker_cooldown(self) -> int:
+        return max(5, _read_int("PROVIDER_BREAKER_COOLDOWN", 60))
+
+    # Local NCM fallback (experimental, opt-in).
+    @property
+    def ncm_local_enabled(self) -> bool:
+        return _read_bool("NCM_LOCAL_ENABLED", False)
+
+    @property
+    def ncm_local_base_url(self) -> str:
+        return _read_env("NCM_LOCAL_BASE_URL", "http://127.0.0.1:11435/v1").rstrip("/")
+
+    @property
+    def ncm_local_model(self) -> str:
+        return _read_env("NCM_LOCAL_MODEL", "ncm-instruct-725m")
+
+    # Local Ollama fallback (Qwen3.5-9B or configured local model).
+    @property
+    def local_ollama_enabled(self) -> bool:
+        return _read_bool("LOCAL_OLLAMA_ENABLED", False)
+
+    @property
+    def local_ollama_base_url(self) -> str:
+        return _read_env("LOCAL_OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1").rstrip("/")
+
+    @property
+    def local_ollama_model(self) -> str:
+        return _read_env("LOCAL_OLLAMA_MODEL", "qwen3.5:9b-q4_K_M")
+
+    @property
+    def local_ollama_min_tokens(self) -> int:
+        # Thinking models need room to finish reasoning before the answer.
+        return max(128, _read_int("LOCAL_OLLAMA_MIN_TOKENS", 512))
+
+    @property
+    def local_ollama_think(self) -> bool:
+        # Native Ollama /api/chat honors think=false; the OpenAI shim does not.
+        return _read_bool("LOCAL_OLLAMA_THINK", False)
+
+    @property
+    def local_ollama_ctx(self) -> int:
+        return max(1024, _read_int("LOCAL_OLLAMA_CTX", 8192))
+
+    # Official NCM LM1B-large (unconditional; explicit model only).
+    @property
+    def ncm_lm1b_enabled(self) -> bool:
+        return _read_bool("NCM_LM1B_ENABLED", False)
+
+    @property
+    def ncm_lm1b_base_url(self) -> str:
+        return _read_env("NCM_LM1B_BASE_URL", "http://127.0.0.1:11436/v1").rstrip("/")
+
+    @property
+    def ncm_lm1b_model(self) -> str:
+        return _read_env("NCM_LM1B_MODEL", "ncm-lm1b-large")
+
     # Optional upstream API keys
     @property
     def groq_api_key(self) -> str:

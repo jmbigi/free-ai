@@ -1,0 +1,24 @@
+# Ollama 0.40.15 local inference for the Qwen3.5-9B fallback.
+# Requires the Ollama 0.40.15 tree at %h/ollama-0.40.15 and models at %h/.ollama/models.
+# Install: cp deploy/ollama.service.example ~/.config/systemd/user/ollama.service
+#          systemctl --user daemon-reload && systemctl --user enable --now ollama.service
+
+[Unit]
+Description=Ollama local inference (0.40.15, loopback)
+After=network.target
+
+[Service]
+Type=simple
+Environment=OLLAMA_HOST=127.0.0.1:11434
+Environment=OLLAMA_MODELS=%h/.ollama/models
+Environment=OLLAMA_CONTEXT_LENGTH=8192
+Environment=OLLAMA_NUM_PARALLEL=1
+Environment=OLLAMA_MAX_LOADED_MODELS=1
+Environment=OLLAMA_KEEP_ALIVE=30m
+ExecStart=%h/ollama-0.40.15/bin/ollama serve
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

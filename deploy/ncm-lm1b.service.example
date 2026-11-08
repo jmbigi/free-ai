@@ -1,0 +1,22 @@
+# NCM LM1B-large local server (unconditional; OpenAI-compatible, loopback only).
+# Requires /home/kubuntu/ncm with the official checkpoint at artifacts/lm1b/large.
+# Install: cp deploy/ncm-lm1b.service.example ~/.config/systemd/user/ncm-lm1b.service
+#          systemctl --user daemon-reload && systemctl --user enable --now ncm-lm1b.service
+
+[Unit]
+Description=NCM LM1B-large local (unconditional, OpenAI-compatible)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/free-ai/local/ncm
+Environment=NCM_HOME=%h/ncm
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/ncm/.venv/bin/python -m uvicorn ncm_lm1b_server:app --host 127.0.0.1 --port 11436
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

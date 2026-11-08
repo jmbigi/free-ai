@@ -1,5 +1,12 @@
 from __future__ import annotations
+import json
+import time
+import uuid
+
+import httpx
+
 from .openai_compat import OpenAICompatProvider
+from .base import ModelInfo, ProviderError, parse_retry_after
 from ..config import settings
 
 class _S(OpenAICompatProvider):
@@ -163,6 +170,217 @@ class GenericOpenAIProvider(_S):
     default_models = [
         ("default", "gpt-4o-mini", ["chat"], "Pass a concrete model id as openai-compatible/<model> when using a custom upstream."),
     ]
+
+
+class NCMLm1bProvider(_S):
+    """Official NCM LM1B-large: unconditional 128-token generation; ignores prompts."""
+    id = "ncm-lm1b"; label = "NCM LM1B-large local (unconditional; ignores prompt)"
+    @property
+    def base_url(self): return settings.ncm_lm1b_base_url
+    @property
+    def api_key(self): return "local" if settings.ncm_lm1b_enabled else ""
+    def available(self): return bool(settings.ncm_lm1b_enabled and self.base_url)
+    @property
+    def default_models(self):
+        m = settings.ncm_lm1b_model
+        return [(m, m, ["chat"], "Official NCM LM1B-large; unconditional, fixed 128 tokens, ignores prompts.")]
+
+    async def list_models(self):
+        m = settings.ncm_lm1b_model
+        return [ModelInfo(
+            id=f"{self.id}/{m}", provider=self.id, owned_by=self.id,
+            upstream_model=m, capabilities=["chat"],
+            note="Official NCM LM1B-large; unconditional, fixed 128 tokens; ignores prompts.",
+        )]
+
+
+class OllamaLocalProvider(_S):
+    """Local Ollama OpenAI-compatible endpoint (Qwen3.5-9B or configured model)."""
+    id = "local-ollama"; label = "Qwen3.5-9B local (Ollama, experimental fallback)"
+    @property
+    def base_url(self): return settings.local_ollama_base_url
+    @property
+    def api_key(self): return "ollama" if settings.local_ollama_enabled else ""
+    def available(self): return bool(settings.local_ollama_enabled and self.base_url)
+    @property
+    def default_models(self):
+        m = settings.local_ollama_model
+        return [(m, m, ["chat"], "Local Ollama model; Apache-2.0 (Qwen3.5); 8GB VRAM; experimental fallback.")]
+
+    async def list_models(self):
+        # Expose only the configured safe model. Other local models can still be
+        # requested explicitly as local-ollama/<model>, but are not auto-listed
+        # (an 18GB model would OOM this 8GB GPU).
+        m = settings.local_ollama_model
+        return [ModelInfo(
+            id=f"{self.id}/{m}", provider=self.id, owned_by=self.id,
+            upstream_model=m, capabilities=["chat"],
+            note="Configured local Ollama fallback; not a guarantee of upstream quality.",
+        )]
+
+    def _native_url(self) -> str:
+        base = self.base_url.removesuffix("/v1").rstrip("/")
+        return f"{base}/api/chat"
+
+    def _body(self, payload, model) -> dict:
+        requested = int(payload.get("max_tokens") or payload.get("max_completion_tokens") or 0)
+        minimum = int(getattr(settings, "local_ollama_min_tokens", 512) or 512)
+        num_predict = max(requested, minimum) if requested else minimum
+        messages = []
+        for m in payload.get("messages") or []:
+            content = m.get("content")
+            if isinstance(content, list):
+                content = " ".join(
+                    str(x.get("text") or x.get("content") or "") if isinstance(x, dict) else str(x)
+                    for x in content
+                )
+            messages.append({"role": m.get("role", "user"), "content": str(content or "")})
+        body = {
+            "model": model.upstream_model or model.id,
+            "messages": messages,
+            "stream": False,
+            "think": bool(settings.local_ollama_think),
+            "options": {
+                "num_ctx": int(settings.local_ollama_ctx),
+                "num_predict": num_predict,
+                "temperature": float(payload.get("temperature") or 0),
+                "top_p": float(payload.get("top_p") or 1.0),
+            },
+        }
+        if payload.get("stop"):
+            body["options"]["stop"] = payload["stop"]
+        if payload.get("tools"):
+            body["tools"] = payload["tools"]
+        return body
+
+    async def chat(self, payload, model):
+        body = self._body(payload, model)
+        timeout = httpx.Timeout(float(getattr(settings, "request_timeout", 120) or 120), connect=8.0)
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.post(self._native_url(), json=body)
+        if r.status_code >= 400:
+            raise ProviderError(
+                f"Ollama error {r.status_code}: {r.text[:350]}",
+                status=r.status_code, provider=self.id,
+                retry_after=parse_retry_after(r.headers.get("retry-after")),
+            )
+        data = r.json()
+        msg = data.get("message") or {}
+        content = str(msg.get("content") or "")
+        thinking = str(msg.get("thinking") or "")
+        if not content and thinking:
+            raise ProviderError(
+                "Ollama returned only thinking; set LOCAL_OLLAMA_THINK=0 or increase tokens.",
+                status=502, provider=self.id,
+            )
+        if not content:
+            raise ProviderError("Ollama returned empty content", status=502, provider=self.id)
+        prompt_tokens = int(data.get("prompt_eval_count") or 0)
+        completion_tokens = int(data.get("eval_count") or 0)
+        out = {
+            "id": f"chatcmpl-ollama-{uuid.uuid4().hex[:16]}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": body["model"],
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": content, **({"reasoning": thinking} if thinking else {})},
+                "finish_reason": "stop",
+            }],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
+            "provider": self.id,
+            "requested_model": model.id,
+            "gateway": {
+                "local": True, "ollama": True,
+                "think": bool(settings.local_ollama_think),
+                "num_ctx": int(settings.local_ollama_ctx),
+                "num_predict": int(body["options"]["num_predict"]),
+            },
+        }
+        return out
+
+    async def stream_chat(self, payload, model):
+        body = self._body(payload, model)
+        body["stream"] = True
+        stream_id = f"chatcmpl-ollama-{uuid.uuid4().hex[:16]}"
+        created = int(time.time())
+        timeout = httpx.Timeout(
+            connect=10.0,
+            read=float(getattr(settings, "request_timeout", 120) or 120),
+            write=30.0,
+            pool=10.0,
+        )
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            async with c.stream("POST", self._native_url(), json=body) as r:
+                if r.status_code >= 400:
+                    err = (await r.aread()).decode(errors="ignore")
+                    raise ProviderError(
+                        f"Ollama error {r.status_code}: {err[:350]}",
+                        status=r.status_code, provider=self.id,
+                    )
+                done_seen = False
+                async for line in r.aiter_lines():
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        raise ProviderError(
+                            f"Ollama stream returned invalid JSON: {line[:120]}",
+                            status=502, provider=self.id,
+                        ) from exc
+                    msg = data.get("message") or {}
+                    content = str(msg.get("content") or "")
+                    thinking = str(msg.get("thinking") or "")
+                    if content or thinking:
+                        delta = {"role": "assistant"}
+                        if content:
+                            delta["content"] = content
+                        if thinking:
+                            delta["reasoning"] = thinking
+                        chunk = {
+                            "id": stream_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": body["model"],
+                            "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+                        }
+                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
+                    if data.get("done"):
+                        done_seen = True
+                        final = {
+                            "id": stream_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": body["model"],
+                            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                        }
+                        yield f"data: {json.dumps(final, ensure_ascii=False)}\n\n".encode()
+                        yield b"data: [DONE]\n\n"
+                        return
+                if not done_seen:
+                    raise ProviderError(
+                        "Ollama stream ended without done marker",
+                        status=502, provider=self.id,
+                    )
+
+
+class NCMProvider(_S):
+    """Local NCM-Instruct-725M (experimental, 128-token context, CC BY-NC-SA)."""
+    id = "ncm"; label = "NCM-Instruct 725M local (experimental, thinker-lite)"
+    @property
+    def base_url(self): return settings.ncm_local_base_url
+    @property
+    def api_key(self): return "local" if settings.ncm_local_enabled else ""
+    def available(self): return bool(settings.ncm_local_enabled and self.base_url)
+    @property
+    def default_models(self):
+        m = settings.ncm_local_model
+        return [(m, m, ["chat"], "Local NCM-Instruct-725M experimental; 128-token context; CC BY-NC-SA 4.0; thinker-lite layer.")]
 
 
 class LLM7Provider(_S):

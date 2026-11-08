@@ -1,7 +1,8 @@
 from __future__ import annotations
 from typing import Any, AsyncIterator
 import httpx
-from .base import BaseProvider, ModelInfo, ProviderError
+from .base import BaseProvider, ModelInfo, ProviderError, parse_retry_after
+from ..config import settings
 from ..logging import log as _log
 
 BASE = "https://text.pollinations.ai"
@@ -63,7 +64,11 @@ class PollinationsProvider(BaseProvider):
         async with httpx.AsyncClient(timeout=timeout) as c:
             r = await c.post(f"{BASE}/openai", json=body)
         if r.status_code >= 400:
-            raise ProviderError(f"Pollinations error {r.status_code}: {r.text[:350]}", status=r.status_code, provider=self.id)
+            raise ProviderError(
+                f"Pollinations error {r.status_code}: {r.text[:350]}",
+                status=r.status_code, provider=self.id,
+                retry_after=parse_retry_after(r.headers.get("retry-after")),
+            )
         data = r.json()
         if isinstance(data, dict):
             data["provider"] = self.id
@@ -74,11 +79,21 @@ class PollinationsProvider(BaseProvider):
     async def stream_chat(self, payload: dict[str, Any], model: ModelInfo) -> AsyncIterator[bytes]:
         body = self._prepare(payload, model.upstream_model or "openai-fast")
         body["stream"] = True
-        async with httpx.AsyncClient(timeout=None) as c:
+        timeout = httpx.Timeout(
+            connect=10.0,
+            read=float(getattr(settings, 'request_timeout', 120) or 120),
+            write=30.0,
+            pool=10.0,
+        )
+        async with httpx.AsyncClient(timeout=timeout) as c:
             async with c.stream("POST", f"{BASE}/openai", json=body) as r:
                 if r.status_code >= 400:
                     err = (await r.aread()).decode(errors="ignore")
-                    raise ProviderError(f"Pollinations error {r.status_code}: {err[:350]}", status=r.status_code, provider=self.id)
+                    raise ProviderError(
+                        f"Pollinations error {r.status_code}: {err[:350]}",
+                        status=r.status_code, provider=self.id,
+                        retry_after=parse_retry_after(r.headers.get("retry-after")),
+                    )
                 async for chunk in r.aiter_bytes():
                     if chunk:
                         yield chunk

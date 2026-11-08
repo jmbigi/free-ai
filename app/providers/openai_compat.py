@@ -1,7 +1,8 @@
 from __future__ import annotations
 from typing import Any, AsyncIterator
 import httpx
-from .base import BaseProvider, ModelInfo, ProviderError
+from .base import BaseProvider, ModelInfo, ProviderError, parse_retry_after
+from ..config import settings
 from ..normalize import normalize_chat_response
 
 _ALLOWED = {
@@ -42,7 +43,7 @@ class OpenAICompatProvider(BaseProvider):
         for mid, upstream, caps, note in self.default_models:
             out.append(ModelInfo(id=f"{self.id}/{mid}", provider=self.id, owned_by=self.id,
                                  upstream_model=upstream, capabilities=caps, note=note))
-        if not self.base_url:
+        if not self.base_url or not self.available():
             return out
         try:
             async with httpx.AsyncClient(timeout=20) as c:
@@ -87,11 +88,15 @@ class OpenAICompatProvider(BaseProvider):
     async def chat(self, payload: dict[str, Any], model: ModelInfo) -> dict[str, Any]:
         body = self._prepare(payload, model.upstream_model or model.id)
         body["stream"] = False
-        timeout = httpx.Timeout(float(getattr(__import__('app.config',fromlist=['settings']).settings,'request_timeout',45) or 45), connect=8.0)
+        timeout = httpx.Timeout(float(getattr(settings, 'request_timeout', 45) or 45), connect=8.0)
         async with httpx.AsyncClient(timeout=timeout) as c:
             r = await c.post(f"{self.base_url.rstrip('/')}/chat/completions", json=body, headers=self._headers())
         if r.status_code >= 400:
-            raise ProviderError(f"{self.label} error {r.status_code}: {r.text[:350]}", status=r.status_code, provider=self.id)
+            raise ProviderError(
+                f"{self.label} error {r.status_code}: {r.text[:350]}",
+                status=r.status_code, provider=self.id,
+                retry_after=parse_retry_after(r.headers.get("retry-after")),
+            )
         data = r.json()
         if isinstance(data, dict):
             data["provider"] = self.id
@@ -101,11 +106,22 @@ class OpenAICompatProvider(BaseProvider):
     async def stream_chat(self, payload: dict[str, Any], model: ModelInfo) -> AsyncIterator[bytes]:
         body = self._prepare(payload, model.upstream_model or model.id)
         body["stream"] = True
-        async with httpx.AsyncClient(timeout=None) as c:
+        # Idle read timeout: a stalled upstream aborts instead of hanging forever.
+        timeout = httpx.Timeout(
+            connect=10.0,
+            read=float(getattr(settings, 'request_timeout', 120) or 120),
+            write=30.0,
+            pool=10.0,
+        )
+        async with httpx.AsyncClient(timeout=timeout) as c:
             async with c.stream("POST", f"{self.base_url.rstrip('/')}/chat/completions", json=body, headers=self._headers()) as r:
                 if r.status_code >= 400:
                     err = (await r.aread()).decode(errors="ignore")
-                    raise ProviderError(f"{self.label} error {r.status_code}: {err[:350]}", status=r.status_code, provider=self.id)
+                    raise ProviderError(
+                        f"{self.label} error {r.status_code}: {err[:350]}",
+                        status=r.status_code, provider=self.id,
+                        retry_after=parse_retry_after(r.headers.get("retry-after")),
+                    )
                 async for chunk in r.aiter_bytes():
                     if chunk:
                         yield chunk

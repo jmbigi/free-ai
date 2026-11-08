@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Any, AsyncIterator
 import httpx
-from .base import BaseProvider, ModelInfo, ProviderError
+from .base import BaseProvider, ModelInfo, ProviderError, parse_retry_after
 from ..config import settings
 
 class CloudflareProvider(BaseProvider):
@@ -39,15 +39,29 @@ class CloudflareProvider(BaseProvider):
         async with httpx.AsyncClient(timeout=180) as c:
             r=await c.post(f"{self.base_url}/chat/completions", json=body, headers=self._headers())
         if r.status_code >= 400:
-            raise ProviderError(f"Cloudflare error {r.status_code}: {r.text[:600]}", status=r.status_code, provider=self.id)
+            raise ProviderError(
+                f"Cloudflare error {r.status_code}: {r.text[:600]}",
+                status=r.status_code, provider=self.id,
+                retry_after=parse_retry_after(r.headers.get("retry-after")),
+            )
         data=r.json(); data["provider"]=self.id; data["requested_model"]=model.id; return data
 
     async def stream_chat(self, payload: dict[str, Any], model: ModelInfo) -> AsyncIterator[bytes]:
         body=self._prepare(payload, model.upstream_model or model.id); body["stream"]=True
-        async with httpx.AsyncClient(timeout=None) as c:
+        timeout = httpx.Timeout(
+            connect=10.0,
+            read=float(getattr(settings, 'request_timeout', 120) or 120),
+            write=30.0,
+            pool=10.0,
+        )
+        async with httpx.AsyncClient(timeout=timeout) as c:
             async with c.stream("POST", f"{self.base_url}/chat/completions", json=body, headers=self._headers()) as r:
                 if r.status_code >= 400:
                     err=(await r.aread()).decode(errors="ignore")
-                    raise ProviderError(f"Cloudflare error {r.status_code}: {err[:600]}", status=r.status_code, provider=self.id)
+                    raise ProviderError(
+                        f"Cloudflare error {r.status_code}: {err[:600]}",
+                        status=r.status_code, provider=self.id,
+                        retry_after=parse_retry_after(r.headers.get("retry-after")),
+                    )
                 async for chunk in r.aiter_bytes():
                     if chunk: yield chunk

@@ -363,7 +363,7 @@ async def _free_response(_: bool = Depends(require_api_key_flexible)):
     ctrl = free_control_info()
     def is_free_id(m):
         mid = (m.get('id') or '').lower(); up = (m.get('upstream_model') or '').lower(); prov=(m.get('provider') or '').lower()
-        return prov=='pollinations' or ':free' in mid or ':free' in up or mid.endswith('/free') or (prov=='openrouter' and up=='free')
+        return prov in ('pollinations','ncm','local-ollama','ncm-lm1b') or ':free' in mid or ':free' in up or mid.endswith('/free') or (prov=='openrouter' and up=='free')
     free_models = [m for m in models if m.get('id')!='auto' and is_free_id(m)]
     return {
         'object':'free_control','status':'ok','time':int(time.time()),
@@ -417,7 +417,7 @@ async def _audit_response(_: bool = Depends(require_api_key_flexible)):
     rt = runtime_status()
     def free_sig(m):
         mid=(m.get('id') or '').lower(); up=(m.get('upstream_model') or '').lower(); prov=(m.get('provider') or '').lower()
-        return prov=='pollinations' or ':free' in mid or ':free' in up or mid.endswith('/free') or (prov=='openrouter' and up=='free')
+        return prov in ('pollinations','ncm','local-ollama','ncm-lm1b') or ':free' in mid or ':free' in up or mid.endswith('/free') or (prov=='openrouter' and up=='free')
     clearly=[m for m in models if m.get('id')!='auto' and free_sig(m)]
     active=[p for p in providers if p.get('active')]
     return {
@@ -530,6 +530,8 @@ async def _chat(request: Request, _: bool = Depends(require_api_key_flexible)):
                         yield chunk
                 except ProviderError as e:
                     err = {"error": {"message": str(e), "type": "provider_error", "provider": e.provider, "code": e.status}}
+                    if getattr(e, 'retry_after', None):
+                        err["error"]["retry_after"] = round(float(e.retry_after), 1)
                     yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n".encode()
                     yield b"data: [DONE]\n\n"
             return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -553,7 +555,11 @@ async def _chat(request: Request, _: bool = Depends(require_api_key_flexible)):
         if atts:
             detail["attempts"] = atts
             detail["attempt_count"] = len(atts)
-        raise HTTPException(status_code=e.status, detail=detail)
+        headers = {}
+        if getattr(e, 'retry_after', None):
+            headers["Retry-After"] = str(max(1, int(float(e.retry_after))))
+            detail["retry_after_s"] = round(float(e.retry_after), 1)
+        raise HTTPException(status_code=e.status, detail=detail, headers=headers or None)
 
 for path in [
     "/v1/chat/completions", "/chat/completions", "/openai/v1/chat/completions", "/api/v1/chat/completions",
@@ -640,7 +646,11 @@ async def _responses(request: Request, _: bool = Depends(require_api_key_flexibl
             detail = {"message": str(e), "type": "provider_error", "provider": e.provider, "model": optimized.get("model"), "code": e.status}
             atts = getattr(e, 'attempts', None)
             if atts: detail["attempts"] = atts; detail["attempt_count"] = len(atts)
-            raise HTTPException(status_code=e.status, detail=detail)
+            headers = {}
+            if getattr(e, 'retry_after', None):
+                headers["Retry-After"] = str(max(1, int(float(e.retry_after))))
+                detail["retry_after_s"] = round(float(e.retry_after), 1)
+            raise HTTPException(status_code=e.status, detail=detail, headers=headers or None)
         m=((data.get('choices') or [{}])[0].get('message') or {}); text = m.get('content') or m.get('reasoning') or ''
         gw = dict(data.get('gateway') or {})
         if scrub_count:
