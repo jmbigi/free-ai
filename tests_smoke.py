@@ -78,6 +78,13 @@ forbidden = c.post('/v1/chat/completions', headers=AUTH, json={'model': 'openai/
 ok('FREE_ONLY blocks paid model', forbidden.status_code in (400, 403, 422))
 free = c.post('/v1/projects/generate', headers=AUTH, json={'prompt': 'x', 'name': 't', 'model': 'openai/gpt-4o'})
 ok('project-gen FREE_ONLY blocks', free.status_code in (400, 403, 422))
+llm7 = c.post('/v1/chat/completions', headers=AUTH, json={'model': 'llm7/default', 'messages': [{'role': 'user', 'content': 'Hi'}], 'max_tokens': 8})
+ok('FREE_ONLY allows llm7 keyless', llm7.status_code != 403)
+listed = c.get('/v1/models', headers=AUTH).json().get('data') or []
+llm7_listed = [m for m in listed if m.get('provider') == 'llm7']
+ok('llm7 listed as free', bool(llm7_listed) and all(m.get('free') is True for m in llm7_listed))
+hf_listed = [m for m in listed if m.get('provider') == 'huggingface']
+ok('non-free listed honestly', all(m.get('free') is False for m in hf_listed))
 
 # --- Observability endpoints ---
 ok('metrics endpoint', c.get('/v1/metrics', headers=AUTH).status_code == 200)

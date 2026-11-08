@@ -20,9 +20,10 @@
 13. **Proceso de entrega (cuando aplique).** Investigar en Internet; mejorar; revisar todos los cambios; commit/push cuando haya destino remoto autorizado/configurado. Seguir las reglas de `jmbigi/better-ai` en lo aplicable (ver sección de Referencias): verificación con evidencia, honestidad (sin afirmar sin salida), no secretos, no destrucción, alcance controlado, y gates/auditorías si el repo/flujo los provee. **No inventar remotos ni hacer push sin destino/permiso verificable.**
 
 ## Estado real registrado (2026-11-08, verificado localmente)
-- Servicio: `free-ai-gateway.service` activo/habilitado en `0.0.0.0:8000`, `Linger=yes`.
-- Cuentas `.env` detectadas: `OPENROUTER_API_KEY`, `HUGGINGFACE_API_KEY`/`HUGGING_FACE_API_KEY`. Estado observado en pruebas: OpenRouter con límite/cuota free en rutas probadas; Hugging Face router con restricción de créditos/proveedores habilitados en ruta probada; token HF válido. Pollinations disponible como fuente anónima con rate limits.
-- Verificaciones: auth 401 sin key; `auto` responde con fallback; caché miss→hit; compresión de contexto activa con metadata.
+- Servicio: `free-ai-gateway.service` activo/habilitado en `127.0.0.1:8000` (loopback), `Linger=yes`; público solo por Apache HTTPS `ia.forthtrade.com`. Unit versionado en `deploy/free-ai-gateway.service`.
+- Cuentas `.env` detectadas: `OPENROUTER_API_KEY`, `HUGGINGFACE_API_KEY`/`HUGGING_FACE_API_KEY`. Estado observado en pruebas: OpenRouter con límite/cuota free en rutas probadas; Hugging Face router con restricción de créditos/proveedores habilitados en ruta probada; token HF válido. Pollinations disponible como fuente anónima con rate limits; LLM7 key-optional con cuota diaria propia.
+- Verificaciones de hardening: query keys redactadas en logs uvicorn/Apache; observabilidad (`/v1/telemetry`, `/v1/debug`, `/v1/connections`, `/v1/tools`) requiere auth y no expone IPs; puerto 8000 directo cerrado; `llm7` keyless permitido bajo FREE_ONLY y flags `free` de `/v1/models` alineados con la política; tests smoke `ALL PASS`.
+- Capacidad real observada: en momentos de cuota agotada `auto` puede devolver 502 con intentos honestos (Pollinations 402 cooldown 45s/IP; OpenRouter 429 `free-models-per-day`; LLM7 429 cuota diaria). No es fallo de código: **gratis controlado ≠ ilimitado**.
 - **Remote configurado y push completado (2026-11-08)**: alias SSH `jmbigi-github` → `github.com` (IdentityFile `~/.ssh/id_ed25519`), remote `git@jmbigi-github:jmbigi/free-ai.git`. Push verificado: commit `c570626` en origin/master, tracking configurado. Sin claves ni `.env` en el push (audit de diff: solo código del proyecto + `examples/debug_report.json`).
 
 ## Referencias externas (rulesets de jmbigi)

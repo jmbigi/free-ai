@@ -188,6 +188,9 @@ def _is_free_model(model: ModelInfo | dict[str, Any]) -> bool:
     provider = str(d.get('provider') or '').lower()
     if provider == 'pollinations':
         return True
+    if provider == 'llm7':
+        # Key-optional anonymous endpoint; free/best-effort, quota/availability vary.
+        return True
     if ':free' in mid or ':free' in up or mid.endswith('/free') or up == 'free' or 'openrouter/free' in mid:
         return True
     if 'free' in mid.split('/')[-1] and provider == 'openrouter':
@@ -212,6 +215,11 @@ def _free_control_info() -> dict[str, Any]:
 
 def free_control_info() -> dict[str, Any]:
     return _free_control_info()
+
+
+def is_free_model(model: ModelInfo | dict[str, Any]) -> bool:
+    """Public policy check used by catalogs/status so listed free flags match routing."""
+    return _is_free_model(model)
 
 
 def _retryable(exc: Exception) -> bool:

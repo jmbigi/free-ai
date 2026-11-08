@@ -1,0 +1,19 @@
+[Unit]
+Description=Free AI Gateway (OpenAI-compatible, API_KEY protected)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/admin/free-ai
+EnvironmentFile=/home/admin/free-ai/.env
+Environment=HOST=127.0.0.1
+Environment=PORT=8000
+# Bind loopback only: public traffic must pass through the HTTPS reverse proxy.
+ExecStart=/home/admin/free-ai/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips='*'
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

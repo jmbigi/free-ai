@@ -38,10 +38,11 @@ En `.env` (gitignored): `OPENROUTER_API_KEY`, `HUGGINGFACE_API_KEY`/`HUGGING_FAC
 
 ## Operación local
 ```bash
-cd /home/admin/free-ai && ./run.sh
-# o systemd --user: free-ai-gateway.service
+cd /home/admin/free-ai && ./run.sh   # 127.0.0.1:8000 por defecto (detrás del proxy)
+# o systemd --user: deploy/free-ai-gateway.service
 .venv/bin/python tests_smoke.py
 ```
+No exponer `0.0.0.0:8000` a Internet: bypassa HTTPS y la redacción de logs. Público solo por `https://ia.forthtrade.com` (Apache).
 
 ## Limitación real (obligatoria)
 **Gratis/controlado ≠ ilimitado.** `FREE_ONLY` prioriza candidatos free-tier/anónimos explícitos, pero proveedores upstream imponen cuotas, rate limits, créditos, términos o capacidad variable. El gateway maximiza disponibilidad; **no garantiza inferencia remota avanzada gratuita ilimitada**. Reportar estado con evidencia (`/v1/audit`, `/v1/metrics`, `attempts`).

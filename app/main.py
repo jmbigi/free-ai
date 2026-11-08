@@ -14,7 +14,7 @@ from .cache import cache_key, cacheable, response_cache
 from .config import settings
 from .context import compress_messages
 from .providers.base import ProviderError
-from .router import catalog, execute_with_fallback, stream_with_fallback, runtime_status, free_control_info
+from .router import catalog, execute_with_fallback, stream_with_fallback, runtime_status, free_control_info, is_free_model
 from .observability import metrics
 from .help_page import render_help_html, help_payload
 from .tool_repair import repair_messages
@@ -437,7 +437,7 @@ async def _models_response(_: bool = Depends(require_api_key_flexible)):
     providers, models = await catalog()
     data = [{
         "id": m["id"], "object": "model", "created": 0, "owned_by": m["owned_by"],
-        "provider": m["provider"], "free": m.get("free", True), "capabilities": m.get("capabilities", []),
+        "provider": m["provider"], "free": is_free_model(m), "capabilities": m.get("capabilities", []),
         "note": m.get("note", ""),
     } for m in models]
     return {"object": "list", "providers": providers, "data": data}

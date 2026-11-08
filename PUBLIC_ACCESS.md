@@ -1,24 +1,15 @@
 # Acceso público (desde cualquier equipo)
 
 ## Estado verificado en este servidor
-- Servicio: `free-ai-gateway.service` **active/enabled**, `uvicorn` en `0.0.0.0:8000`, `Linger=yes`.
+- Servicio: `free-ai-gateway.service` **active/enabled**, `uvicorn` en `127.0.0.1:8000` (loopback), `Linger=yes`.
 - Prueba local: `http://127.0.0.1:8000/health` → OK.
-- Prueba desde la red del host: `http://109.123.248.91:8000/health` → OK (el puerto 8000 responde en la interfaz pública del servidor).
+- Acceso público: **solo** `https://ia.forthtrade.com` vía Apache. Puerto 8000 directo cerrado.
+- Unit versionado: `deploy/free-ai-gateway.service`.
 
-> **Importante:** que `0.0.0.0:8000` responda localmente no garantiza acceso desde Internet: puede haber firewall del proveedor/VPS, security group o NAT bloqueando el puerto 8000. Si no carga desde otro equipo, usa reverse proxy HTTPS por 80/443 (recomendado) o abre el puerto 8000 en el firewall del proveedor.
+> **Importante:** no expongas `0.0.0.0:8000` a Internet. Bypassea HTTPS, la redacción de query keys en logs y el proxy. El único acceso público debe ser el reverse proxy HTTPS 80/443.
 
-## Opción A — Acceso directo (rápido, menos recomendado)
-Si el proveedor/firewall permite TCP 8000:
-- Base URL: `http://109.123.248.91:8000/v1` (o `http://TU_DOMINIO:8000/v1`)
-- API key: valor de `API_KEY` en `/home/admin/free-ai/.env`
-- Prueba:
-```bash
-curl http://109.123.248.91:8000/health
-curl http://109.123.248.91:8000/v1/chat/completions \
-  -H "Authorization: Bearer TU_API_KEY" -H "Content-Type: application/json" \
-  -d '{"model":"auto","messages":[{"role":"user","content":"Responde solo: OK"}]}'
-```
-Riesgo: HTTP sin TLS expone la API key si se usa por Internet público. Preferir HTTPS.
+## Opción A — Acceso directo (solo LAN/pruebas, deshabilitado por defecto)
+Solo si controlás firewall y red confiable: arrancar con `HOST=0.0.0.0 ./run.sh` (o editar el unit). No recomendado: HTTP sin TLS expone la API key y evita la redacción de logs del proxy.
 
 ## Opción B — HTTPS con Apache reverse proxy (recomendado en este servidor)
 Apache ya sirve 80/443. Plantilla: `deploy/apache-free-ai-gateway.conf`.
@@ -43,7 +34,7 @@ sudo apachectl configtest && sudo systemctl reload httpd
 Plantilla: `deploy/Caddyfile.example`. Caddy gestiona TLS automáticamente si el DNS apunta al servidor.
 
 ## Configuración en clientes (KiloCode/OpenCode/DeepSeek harness/OpenAI-compatible)
-- **Base URL**: `https://TU_DOMINIO/v1` (o `http://IP:8000/v1` en prueba controlada)
+- **Base URL**: `https://TU_DOMINIO/v1` (HTTPS reverse proxy)
 - **API Key**: la `API_KEY` del gateway (`.env`), **no** las claves upstream.
 - **Modelo**: `auto` (recomendado, fallback + caché + compresión).
 
@@ -58,8 +49,8 @@ print(r.choices[0].message.content)
 ## Seguridad operativa
 - Mantén `API_KEY` secreta; rota si se expone.
 - No expongas `.env` ni claves upstream.
-- Prefiere HTTPS.
-- Si dejas 8000 abierto, considera limitar por firewall a IPs conocidas (requiere acceso admin del proveedor/firewall).
+- Usa siempre HTTPS por el reverse proxy; mantené 8000 en loopback y bloqueado por firewall.
+- Los query keys (`?key=`) se aceptan por compatibilidad, pero se redactan en logs uvicorn/Apache. Preferí headers (`Authorization: Bearer`).
 
 
 ## Conexión desde Kimi / Moonshot / clientes OpenAI-compatible
@@ -67,7 +58,7 @@ Este gateway expone una API **OpenAI-compatible** con **una sola API key del gat
 
 ### Caso 1 — Usar este gateway como endpoint en un cliente compatible (recomendado)
 Configura el cliente/harness para apuntar a tu gateway:
-- **Base URL:** `http://109.123.248.91:8000/v1` (directo; sujeto a firewall del proveedor) o `https://ai.TU_DOMINIO/v1` (HTTPS recomendado).
+- **Base URL:** `https://ai.TU_DOMINIO/v1` (HTTPS reverse proxy). No usar IP:8000 directo.
 - **API Key:** `TU_API_KEY_GATEWAY` (valor de `API_KEY` del gateway).
 - **Model:** `auto` (recomendado: fallback + caché + control `FREE_ONLY`).
 
@@ -96,7 +87,7 @@ Luego consulta modelos/proveedores con `GET /v1/providers` y `GET /v1/models` (a
 
 ### Verificación rápida
 ```bash
-curl -sS http://109.123.248.91:8000/health
-curl -sS http://109.123.248.91:8000/v1/status -H "Authorization: Bearer TU_API_KEY_GATEWAY"
-curl -sS http://109.123.248.91:8000/v1/free -H "Authorization: Bearer TU_API_KEY_GATEWAY"
+curl -sS https://ia.forthtrade.com/health
+curl -sS https://ia.forthtrade.com/v1/status -H "Authorization: Bearer TU_API_KEY_GATEWAY"
+curl -sS https://ia.forthtrade.com/v1/free -H "Authorization: Bearer TU_API_KEY_GATEWAY"
 ```
