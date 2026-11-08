@@ -1,8 +1,6 @@
 from __future__ import annotations
 from typing import Any
 
-_REASONING_KEYS = ('reasoning', 'reasoning_content', 'thinking', 'thought')
-
 
 def _extract_text(content: Any) -> str:
     if content is None:
@@ -27,9 +25,10 @@ def _extract_text(content: Any) -> str:
 
 def normalize_chat_response(data: dict[str, Any] | Any) -> Any:
     """Make upstream chat responses more compatible with OpenAI clients/gateway code.
-    - Promotes reasoning-only output to content when content is empty and no tool calls.
+    - Preserves reasoning/thinking fields as separate entries when present.
     - Normalizes list content to text where safe.
     Never fabricates content when a real answer/tool call exists.
+    Never silently drops reasoning fields into content (keeps them distinct for clients like KimiCode that expect separate reasoning UI).
     """
     if not isinstance(data, dict):
         return data
@@ -44,23 +43,14 @@ def normalize_chat_response(data: dict[str, Any] | Any) -> Any:
             continue
         text = _extract_text(msg.get('content'))
         if not text and not msg.get('tool_calls') and not msg.get('function_call'):
-            for k in _REASONING_KEYS:
-                v = msg.get(k)
-                if isinstance(v, str) and v.strip():
-                    # keep reasoning field, but also provide content for compatibility
-                    msg['content'] = v.strip()
-                    data.setdefault('gateway', {})
-                    if isinstance(data['gateway'], dict):
-                        data['gateway']['content_from_reasoning'] = True
-                    break
-                if isinstance(v, list):
-                    joined = '\n'.join(str(x.get('text') or x) for x in v if x)
-                    if joined.strip():
-                        msg['content'] = joined.strip()
-                        data.setdefault('gateway', {})
-                        if isinstance(data['gateway'], dict):
-                            data['gateway']['content_from_reasoning'] = True
-                        break
+            # Preserve reasoning/thinking as distinct fields; do NOT merge into content.
+            # Remove marker if previously set, to keep reasoning distinct.
+            if 'content_from_reasoning' in msg or (isinstance(data.get('gateway'), dict) and data['gateway'].get('content_from_reasoning')):
+                # clean up any previously-promoted marker so reasoning stays distinct
+                if isinstance(data.get('gateway'), dict):
+                    data['gateway'].pop('content_from_reasoning', None)
+            # Keep reasoning/thinking fields exactly as-is; do not reassign to content.
+            # Only move content if there is actual text content already present.
         elif text and not isinstance(msg.get('content'), str):
             msg['content'] = text
     return data

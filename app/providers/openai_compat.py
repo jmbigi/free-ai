@@ -7,7 +7,9 @@ from ..normalize import normalize_chat_response
 _ALLOWED = {
     'messages','model','frequency_penalty','logit_bias','logprobs','top_logprobs','max_tokens','max_completion_tokens',
     'n','presence_penalty','response_format','seed','stop','stream','stream_options','temperature','top_p','tools','tool_choice',
-    'parallel_tool_calls','user','metadata','reasoning_effort','extra_body'
+    'parallel_tool_calls','user','metadata','reasoning_effort','extra_body',
+    # thinking / reasoning passthrough for clients like KimiCode
+    'reasoning','reasoning_content','thinking','thought','reasoning_budget','reasoning_tokens',
 }
 _DROP = {'provider','route','api_key','apikey','key','prompt','input','access_token','token'}
 
