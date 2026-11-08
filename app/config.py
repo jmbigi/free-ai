@@ -132,6 +132,15 @@ class SettingsProxy:
     def context_summary_max_chars(self) -> int:
         return max(500, _read_int("CONTEXT_SUMMARY_MAX_CHARS", 4000))
 
+    # Free-tier spacing (Pollinations anonymous enforces ~1 reply/45s/IP).
+    @property
+    def pollinations_min_interval(self) -> int:
+        return max(0, _read_int("POLLINATIONS_MIN_INTERVAL", 46))
+
+    @property
+    def free_tier_max_wait(self) -> int:
+        return max(1, _read_int("FREE_TIER_MAX_WAIT", 60))
+
     # Optional upstream API keys
     @property
     def groq_api_key(self) -> str:

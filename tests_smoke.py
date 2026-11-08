@@ -7,6 +7,7 @@ _vals = dotenv_values(_env) if _env.exists() else {}
 _key = (_vals.get('FT_AI_API_KEY') or _vals.get('API_KEY') or os.getenv('FT_AI_API_KEY') or os.getenv('API_KEY') or 'test-gateway-key')
 _key = str(_key).strip().strip('"\'')
 os.environ.setdefault('FT_AI_API_KEY', _key); os.environ.setdefault('API_KEY', _key)
+os.environ.setdefault('POLLINATIONS_MIN_INTERVAL', '0')
 from fastapi.testclient import TestClient
 from app.main import app
 

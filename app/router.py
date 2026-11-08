@@ -22,6 +22,9 @@ from .tool_support import has_tools, inject_tool_prompt, maybe_synthesize_tool_c
 _COOLDOWN: dict[str, float] = {}
 # provider_id -> {ok,fail,last_ok,last_fail,last_error,latency_ms,ema_ms}
 _STATS: dict[str, dict[str, Any]] = {}
+# Free-tier spacing: serialize upstream calls with a minimum start interval.
+_RATE_LOCKS: dict[str, asyncio.Lock] = {}
+_RATE_LAST: dict[str, float] = {}
 # singleton instances + catalog cache (efficiency)
 _INSTANCES: list[Any] | None = None
 _CATALOG_CACHE: tuple[float, list[dict[str, Any]], list[dict[str, Any]]] | None = None
@@ -69,6 +72,26 @@ AUTO_CANDIDATES = [
 ]
 
 
+async def _throttle(provider_id: str) -> None:
+    """Space calls to providers with a documented anonymous free-tier interval."""
+    interval = float(getattr(settings, "pollinations_min_interval", 46) or 0) if provider_id == "pollinations" else 0.0
+    if interval <= 0:
+        return
+    lock = _RATE_LOCKS.setdefault(provider_id, asyncio.Lock())
+    async with lock:
+        wait = interval - (time.time() - _RATE_LAST.get(provider_id, 0.0))
+        if wait > 0:
+            max_wait = float(getattr(settings, "free_tier_max_wait", 60) or 60)
+            if wait > max_wait:
+                raise ProviderError(
+                    f"{provider_id} free-tier spacing requires waiting {wait:.0f}s (max {max_wait:.0f}s); try again later.",
+                    status=429, provider=provider_id,
+                )
+            _log.info("free-tier throttle %s: waiting %.1fs", provider_id, wait)
+            await asyncio.sleep(wait)
+        _RATE_LAST[provider_id] = time.time()
+
+
 def _stat(pid: str) -> dict[str, Any]:
     return _STATS.setdefault(pid, {"ok": 0, "fail": 0, "last_ok": None, "last_fail": None, "last_error": "", "latency_ms": None, "ema_ms": None})
 
@@ -84,7 +107,7 @@ def _record(pid: str, *, ok: bool, ms: int | None = None, error: str = ""):
     if error:
         s["last_error"] = error[:300]
     try:
-        _metrics_obs.metrics.update_provider_stats(pid, {
+        _metrics_obs.update_provider_stats(pid, {
             "ok": s.get("ok", 0), "fail": s.get("fail", 0),
             "last_ok": s.get("last_ok"), "last_fail": s.get("last_fail"),
             "last_error": s.get("last_error") or "",
@@ -329,6 +352,7 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
     async def try_one(provider, model) -> dict[str, Any] | None:
         t0 = time.time()
         try:
+            await _throttle(provider.id)
             send = inject_tool_prompt(payload) if has_tools(payload) else payload
             data = await provider.chat(send, model)
             data = maybe_synthesize_tool_calls(data, payload)
@@ -457,6 +481,7 @@ async def stream_with_fallback(payload: dict[str, Any]) -> AsyncIterator[bytes]:
         t0 = time.time()
         yielded = False
         try:
+            await _throttle(p.id)
             async for chunk in p.stream_chat(payload, m):
                 yielded = True
                 yield chunk
