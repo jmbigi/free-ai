@@ -105,11 +105,30 @@ def _quality_notes(files: list[dict[str, str]]) -> list[dict[str, Any]]:
                 notes.append({'path': path, 'check': 'python_ast', 'ok': True})
             except Exception as e:
                 notes.append({'path': path, 'check': 'python_ast', 'ok': False, 'error': str(e)[:220]})
-            for m in re.finditer(r'logger\.(?:debug|info|warning|error|exception|critical)\s*\(([^)]{0,400})\)', content):
+            for m in re.finditer(r'logger\.(?:debug|info|warning|error|exception|critical)\s*\(([^)]{0,500})\)', content):
                 call = m.group(1)
-                if ('%d' in call or '%i' in call) and _NON_INT_ARG_RE.search(call):
+                if not call.lstrip().startswith(("'", '"', "f'", 'f"', "r'", 'r"')): continue
+                # find format literal and args
+                q = call.lstrip()[0]
+                if call.lstrip().startswith(('f','r')): q = call.lstrip()[1]
+                i = call.find(q)
+                if i < 0: continue
+                j = i+1
+                while j < len(call):
+                    if call[j]=='\\': j+=2; continue
+                    if call[j]==q: break
+                    j+=1
+                if j>=len(call): continue
+                fmt = call[i:j+1]; rest = call[j+1:]
+                specs = [s.group(0) for s in _FMT_SPEC_RE.finditer(fmt)]
+                args = [a.strip() for a in rest.split(',') if a.strip()]
+                bad = False
+                for si,sp in enumerate(specs):
+                    if sp in ('%d','%i') and si < len(args) and _NON_INT_ARG_RE.search(args[si]):
+                        bad = True; break
+                if bad:
                     notes.append({'path': path, 'check': 'logging_format_heuristic', 'ok': False,
-                                  'warning': 'Possible int format used for non-int arg. Review/fix.', 'sample': call[:180]})
+                                  'warning': 'Int format (%d/%i) used for likely non-int arg (token/uuid/id).', 'sample': call[:180]})
                     break
         elif path.endswith('.json'):
             try:
