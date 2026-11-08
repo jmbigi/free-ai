@@ -701,3 +701,31 @@ for path in ['/v1/decision','/decision','/v1/agent/decision']:
 @app.get("/api/v1")
 async def v1_root(_: bool = Depends(require_api_key_flexible)):
     return {"object": "api", "name": "Free AI Gateway", "openai_compatible": True, "endpoints": ["/v1/models", "/v1/chat/completions", "/v1/cache"]}
+
+# --- Project generation (ForthTrade IA generates; temp output) ---
+from .project_gen import generate_one as _project_generate_one
+
+async def _project_generate(request: Request, _: bool = Depends(require_api_key_flexible)):
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail=_openai_error('Invalid JSON body', type_='invalid_request_error', code=400, request_id=getattr(request.state,'request_id','')))
+    prompt = (body.get('prompt') or body.get('objective') or '').strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail=_openai_error('prompt/objective required', type_='invalid_request_error', code=400, param='prompt', request_id=getattr(request.state,'request_id','')))
+    name = str(body.get('name') or 'generated-project')[:120]
+    model = str(body.get('model') or 'auto')
+    if getattr(settings, 'free_only', True) and model != 'auto' and not any(x in model.lower() for x in [':free','/free','pollinations/']):
+        raise HTTPException(status_code=403, detail=_openai_error(f'FREE_ONLY blocks non-free model selection: {model}', type_='forbidden', code=403, request_id=getattr(request.state,'request_id','')))
+    res = await _project_generate_one(
+        prompt=prompt, name=name, model=model,
+        max_tokens=max(256, min(4000, int(body.get('max_tokens') or 1800))),
+        temperature=float(body.get('temperature') or 0),
+        max_retries=max(1, min(4, int(body.get('max_retries') or 2))),
+        retry_delay_s=max(0, min(180, float(body.get('retry_delay_s') or 55))),
+        keep_temp=bool(body.get('keep_temp') or False),
+    )
+    return {'object':'project_generation','status':'ok' if res.get('ok') else 'failed','time':int(time.time()), **res}
+
+for path in ['/v1/projects/generate','/v1/project/generate','/projects/generate']:
+    app.add_api_route(path, _project_generate, methods=['POST'], dependencies=[Depends(require_api_key_flexible)])

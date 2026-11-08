@@ -35,6 +35,7 @@ Uso: ./todo.sh <comando>
   public-check   DNS/HTTPS/readyz
   improve        reporte con evidencia
   code-test [q]  prueba de generación de código (evidencia, respeta rate limits)
+  project-gen "prompt" [name]  ForthTrade IA genera proyecto temporal (extrae ### FILE, borra temp)
 Cliente: export FT_AI_API_KEY=... ; Base https://ia.forthtrade.com/v1 ; model auto
 Nota: FREE_ONLY=gratis/controlado != ilimitado. Rotar FT_AI_API_KEY si se expuso.
 EOF
@@ -89,6 +90,21 @@ try:
  print("ok=",bool(c and not det),"selected=",g.get("selected") or d.get("model"),"tries=",len(g.get("attempts") or det.get("attempts") or []))
  if det: print("error=",(det.get("message") or "")[:280])
  if c: print("---\n"+c[:4000])
+except Exception as e: print("probe_error=",e)
+'
+}
+
+cmd_project_gen(){
+  local h q="${1:-Genera mini proyecto Python con ### FILE: main.py y ### FILE: README.md}" name="${2:-tmp-project}"; h="$(auth_hdr)"
+  info "Project generation via gateway (FREE_ONLY; rate limits apply; temp deleted by default)"
+  curl -sS --max-time 240 -X POST "$BASE/v1/projects/generate" -H "$h" -H 'Content-Type: application/json' \
+    -d "{\"name\":$(printf '%s' "$name" | "$PY" -c 'import json,sys; print(json.dumps(sys.stdin.read()))'),\"prompt\":$(printf '%s' "$q" | "$PY" -c 'import json,sys; print(json.dumps(sys.stdin.read()))'),\"model\":\"auto\",\"temperature\":0,\"max_tokens\":1800,\"max_retries\":2,\"retry_delay_s\":55,\"keep_temp\":false}" | \
+    "$PY" -c 'import sys,json
+try:
+ d=json.load(sys.stdin); print("status=",d.get("status"),"ok=",d.get("ok"),"selected=",d.get("selected"),"files_extracted=",d.get("files_extracted"))
+ print("files=",json.dumps(d.get("files") or [],ensure_ascii=False))
+ if d.get("detail"): print("detail=",json.dumps(d.get("detail"),ensure_ascii=False)[:300])
+ if d.get("content_preview"): print("---\n"+(d.get("content_preview") or "")[:2500])
 except Exception as e: print("probe_error=",e)
 '
 }

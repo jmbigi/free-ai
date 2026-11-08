@@ -36,3 +36,6 @@ print(r.choices[0].message.content)
 
 ## Límite honesto
 `FREE_ONLY=1` controla que se usen rutas free/anónimas explícitas cuando aplica. **No garantiza inferencia gratuita ilimitada**: proveedores imponen cuotas, rate limits, créditos y capacidad variable.
+
+## Generación de proyectos (autónoma)
+`POST /v1/projects/generate` (auth): `{"name","prompt","model":"auto","temperature":0,"max_tokens":1800,"max_retries":2,"retry_delay_s":55,"keep_temp":false}`. El gateway/ForthTrade IA genera, extrae `### FILE: ruta` a `/tmp/kilo` temporal, devuelve metadata/evidencia y borra temporal por defecto (`keep_temp:false`). Respeta `FREE_ONLY` y rate limits (no ilimitado). Usar `./todo.sh project-gen "..." [name]`.

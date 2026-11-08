@@ -48,3 +48,4 @@ cd /home/admin/free-ai && ./run.sh
 
 ## Programación autónoma
 Ver `AGENT_PROGRAMMING.md` para conexión OpenAI-compatible (KiloCode/OpenCode/Kimi/DeepSeek harness/SDK), tools, `/v1/responses`, `/v1/search`, `/v1/decision` y límites FREE_ONLY.
+- `POST /v1/projects/generate`: generación de proyectos temporales por ForthTrade IA (extrae `### FILE`, evidencia, borrado temp por defecto; respeta FREE_ONLY/rate limits).
