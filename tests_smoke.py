@@ -94,4 +94,13 @@ ok('v1 root', c.get('/v1', headers=AUTH).status_code == 200)
 ok('openai/v1 alias', c.get('/openai/v1', headers=AUTH).status_code == 200)
 ok('api/v1 alias', c.get('/api/v1', headers=AUTH).status_code == 200)
 
+# --- PII/secret scrubbing before upstream egress (P0.6) ---
+scrub = c.post('/v1/chat/completions', headers=AUTH, json={'model': 'auto', 'messages': [{'role': 'user', 'content': 'My key is sk-abc123def456ghi789 and email john@example.com SSN 123-45-6789. Responde solo: OK'}], 'max_tokens': 8, 'temperature': 0, 'cache': True})
+ok('scrub endpoint 200/502', scrub.status_code in (200, 502))
+if scrub.status_code == 200:
+    gw = scrub.json().get('gateway', {})
+    ok('scrub metadata present', 'scrubbed' in gw and gw['scrubbed'].get('secrets_pii_redacted', 0) > 0)
+else:
+    print(f"WARN: scrub probe skipped (upstream rate-limited, status={scrub.status_code})")
+
 print('ALL PASS')

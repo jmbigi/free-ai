@@ -19,6 +19,7 @@ from .observability import metrics
 from .help_page import render_help_html, help_payload
 from .tool_repair import repair_messages
 from .search import web_search
+from .pii_scrub import scrub_payload
 from .knowledge import add_source as kb_add, query as kb_query, stats as kb_stats
 
 app = FastAPI(
@@ -477,6 +478,9 @@ async def _chat(request: Request, _: bool = Depends(require_api_key_flexible)):
         before_chars = sum(len(str(m.get('content',''))) for m in (payload.get('messages') or []) if isinstance(m, dict))
     except Exception:
         pass
+    # Scrub secrets/PII BEFORE cache-keying and BEFORE any upstream egress.
+    # The scrubbed payload is what gets cached and sent; redaction count is reported in metadata.
+    payload, scrub_count = scrub_payload(payload)
     optimized = compress_messages(copy.deepcopy(payload))
     payload_for_cache = copy.deepcopy(optimized)
     key = cache_key(payload_for_cache) if cacheable(payload_for_cache) else None
@@ -509,6 +513,8 @@ async def _chat(request: Request, _: bool = Depends(require_api_key_flexible)):
         data.setdefault("object", "chat.completion")
         data.setdefault("created", int(time.time()))
         data.setdefault("gateway", {})
+        if scrub_count:
+            data["gateway"]["scrubbed"] = {"secrets_pii_redacted": scrub_count, "policy": "Deterministic pattern+format-validated redaction before upstream egress (P0.6)."}
         if optimized.get("gateway", {}).get("context_compressed"):
             data["gateway"]["context"] = {k: v for k, v in optimized["gateway"].items() if k.startswith('context') or k in ('messages_before','messages_after','mode')}
         else:
@@ -597,6 +603,7 @@ async def _responses(request: Request, _: bool = Depends(require_api_key_flexibl
             before_chars = sum(len(str(m.get('content',''))) for m in (chat.get('messages') or []) if isinstance(m, dict))
         except Exception:
             pass
+        chat, scrub_count = scrub_payload(chat)
         optimized = compress_messages(copy.deepcopy(chat))
         payload_for_cache = copy.deepcopy(optimized)
         key = cache_key(payload_for_cache) if cacheable(payload_for_cache) else None
@@ -614,7 +621,10 @@ async def _responses(request: Request, _: bool = Depends(require_api_key_flexibl
             if atts: detail["attempts"] = atts; detail["attempt_count"] = len(atts)
             raise HTTPException(status_code=e.status, detail=detail)
         m=((data.get('choices') or [{}])[0].get('message') or {}); text = m.get('content') or m.get('reasoning') or ''
-        resp = {'id': f"resp_{uuid.uuid4().hex[:24]}", 'object':'response','created_at':data.get('created') or int(time.time()),'model':data.get('model'),'status':'completed','output_text':text,'output':[{'type':'message','role':'assistant','content':[{'type':'output_text','text':text}]}],'usage':data.get('usage'),'gateway':data.get('gateway')}
+        gw = dict(data.get('gateway') or {})
+        if scrub_count:
+            gw["scrubbed"] = {"secrets_pii_redacted": scrub_count, "policy": "Deterministic pattern+format-validated redaction before upstream egress (P0.6)."}
+        resp = {'id': f"resp_{uuid.uuid4().hex[:24]}", 'object':'response','created_at':data.get('created') or int(time.time()),'model':data.get('model'),'status':'completed','output_text':text,'output':[{'type':'message','role':'assistant','content':[{'type':'output_text','text':text}]}],'usage':data.get('usage'),'gateway':gw}
         if key and text:
             response_cache.set(key, data, int(getattr(settings, 'cache_ttl_seconds', 300)))
         return JSONResponse(resp)
