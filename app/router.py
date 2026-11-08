@@ -108,7 +108,8 @@ async def catalog(*, refresh: bool = False) -> tuple[list[dict[str, Any]], list[
             st = dict(_stat(p.id))
             try:
                 listed = await asyncio.wait_for(p.list_models(), timeout=12)
-            except Exception:
+            except Exception as e:
+                _log.warning("list_models(%s) failed: %s", p.id, str(e)[:180])
                 listed = []
             return ({"id": p.id, "label": p.label, "active": active, "always_on": p.id == "pollinations", "stats": st}, listed, active or p.id == "pollinations")
         results = await asyncio.gather(*(one(p) for p in _instances()), return_exceptions=True)
@@ -416,8 +417,8 @@ async def stream_with_fallback(payload: dict[str, Any]) -> AsyncIterator[bytes]:
         try:
             p, m = await resolve_model(requested)
             candidates.append((p, m)); tried.add(m.id)
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning("resolve_model(%s) failed: %s", requested, str(e)[:180])
     plan = _build_auto_plan(exclude=tried, max_items=max_attempts)
     # Force-include fast pollinations candidates when FREE_ONLY allows, unless explicitly excluded/blocked by long cooldown.
     if requested == 'auto':

@@ -49,8 +49,9 @@ async def _ddg(query: str, max_results: int = 5) -> list[dict[str, Any]]:
         if 'uddg=' in href:
             try:
                 href = urllib.parse.parse_qs(urllib.parse.urlparse(href).query).get('uddg', [href])[0]
-            except Exception:
-                pass
+            except Exception as e:
+                import logging
+                logging.getLogger("free-ai.search").debug("uddg parse failed: %s", e)
         if href.startswith('//'): href = 'https:' + href
         if title and href.startswith('http'):
             out.append({"title": title, "url": href, "snippet": snippet, "source": "duckduckgo"})

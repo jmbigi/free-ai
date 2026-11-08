@@ -57,6 +57,12 @@ def help_payload(base_url: str = BASE) -> dict:
             "cache": f"{v1}/cache",
             "metrics_auth": f"{v1}/metrics",
             "projects_generate": f"{v1}/projects/generate",
+            "tools": f"{v1}/tools",
+            "telemetry": f"{v1}/telemetry",
+            "debug": f"{v1}/debug",
+            "free": f"{v1}/free",
+            "cache": f"{v1}/cache",
+            "metrics": f"{v1}/metrics",
         },
         "quick_test": curl,
         "clients": {
@@ -90,6 +96,14 @@ def help_payload(base_url: str = BASE) -> dict:
                 "model": "auto",
                 "ui_values": {"Base URL": v1, "API Key": f"${KEY_ENV}", "Model": "auto"},
                 "notes": "Puedes exportar FT_AI_API_KEY y referenciarla en tu entorno/configuración si el cliente lo soporta.",
+            },
+            "opencode": {
+                "type": "OpenCode custom provider (OpenAI-compatible)",
+                "base_url": v1,
+                "api_key": f"${KEY_ENV}",
+                "model": "auto",
+                "config_example": {"provider": "openai-compatible", "baseURL": v1, "apiKey": f"${KEY_ENV}", "model": "auto"},
+                "notes": "Usa el gateway como endpoint compatible. No configures claves upstream en OpenCode.",
             },
             "kimicode_integration": {
                 "title": "Integración KimiCode (Kimi Code) — Paso a paso",
@@ -193,7 +207,19 @@ Base URL: {v1}
 API Key:  ${key}
 Model:    auto</pre><p class="m">Usa la API key del gateway (valor o variable {key}).</p></div>
 </div>
-<div class="card"><h2>Herramientas / function calling</h2><p class="m">Compatible con <code>tools</code>/<code>tool_choice</code> y legacy <code>functions</code>/<code>function_call</code>. El gateway preserva tool calls y aplica compatibilidad cuando el proveedor upstream es limitado.</p><pre>{{"model":"auto","messages":[{{"role":"user","content":"Weather in Paris?"}}],"tools":[{{"type":"function","function":{{"name":"get_weather","parameters":{{"type":"object","properties":{{"city":{{"type":"string"}}}},"required":["city"]}}}}}}],"tool_choice":"auto"}}</pre></div>
+<div class="card"><h2>Herramientas / function calling (10 disponibles)</h2><p class="m">Compatible con <code>tools</code>/<code>tool_choice</code> y legacy <code>functions</code>/<code>function_call</code>. El gateway ejecuta tool calls localmente con implementaciones reales (path-safe).</p>
+<div class="g" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
+<div class="card" style="padding:10px"><h4 style="margin:0 0 6px;font-size:13px">📁 read_file</h4><p style="font-size:11px;color:var(--m)">Lee contenido de archivo. <b>path</b></p></div>
+<div class="card" style="padding:10px"><h4 style="margin:0 0 6px;font-size:13px">📝 write_file</h4><p style="font-size:11px;color:var(--m)">Escribe contenido a archivo (crea directorios). <b>path, content</b></p></div>
+<div class="card" style="padding:10px"><h4 style="margin:0 0 6px;font-size:13px">✏️ edit_file</h4><p style="font-size:11px;color:var(--m)">Reemplaza texto exacto. <b>path, old_str, new_str</b></p></div>
+<div class="card" style="padding:10px"><h4 style="margin:0 0 6px;font-size:13px">📂 list_dir</h4><p style="font-size:11px;color:var(--m)">Lista directorio con tamaños. <b>path</b></p></div>
+<div class="card" style="padding:10px"><h4 style="margin:0 0 6px;font-size:13px">💻 run_bash</h4><p style="font-size:11px;color:var(--m)">Ejecuta comando (timeout 30s). <b>command</b></p></div>
+<div class="card" style="padding:10px"><h4 style="margin:0 0 6px;font-size:13px">🔍 grep</h4><p style="font-size:11px;color:var(--m)">Busca regex en archivos recursivo. <b>pattern, path</b></p></div>
+<div class="card" style="padding:10px"><h4 style="margin:0 0 6px;font-size:13px">🌐 web_search</h4><p style="font-size:11px;color:var(--m)">Busca web (DDG/SearXNG/Tavily/Brave). <b>query</b></p></div>
+<div class="card" style="padding:10px"><h4 style="margin:0 0 6px;font-size:13px">🔗 web_fetch</h4><p style="font-size:11px;color:var(--m)">Fetch URL → texto/markdown. <b>url</b></p></div>
+<div class="card" style="padding:10px"><h4 style="margin:0 0 6px;font-size:13px">🐍 python_exec</h4><p style="font-size:11px;color:var(--m)">Ejecuta Python (timeout 30s). <b>code</b></p></div>
+<div class="card" style="padding:10px"><h4 style="margin:0 0 6px;font-size:13px">📊 json_query</h4><p style="font-size:11px;color:var(--m)">Query JSON por ruta. <b>data, path</b></p></div>
+</div></div>
 <div class="card"><h2>Prueba rápida</h2><pre>export {key}="TU_API_KEY_GATEWAY"
 curl -sS {v1}/chat/completions \\
   -H "Authorization: Bearer ${key}" \\
@@ -202,6 +228,9 @@ curl -sS {v1}/chat/completions \\
 <div class="card"><h2>Endpoints útiles</h2><table><tr><th>Endpoint</th><th>Uso</th></tr>
 <tr><td><code>POST /v1/chat/completions</code></td><td>Chat OpenAI-compatible (recomendado)</td></tr>
 <tr><td><code>POST /v1/responses</code></td><td>Compatibilidad básica Responses API</td></tr>
+<tr><td><code>GET /v1/tools</code></td><td>Listar 10 herramientas function calling</td></tr>
+<tr><td><code>GET /v1/telemetry</code></td><td>Métricas agregadas, cache, free_control</td></tr>
+<tr><td><code>GET /v1/debug</code></td><td>Estado runtime, cooldowns, límites</td></tr>
 <tr><td><code>GET /v1/models</code></td><td>Catálogo (auth)</td></tr>
 <tr><td><code>GET /v1/metrics</code></td><td>Latencia/errores/uptime (auth)</td></tr>
 <tr><td><code>GET /v1/audit</code></td><td>Auditoría FREE_ONLY/eficiencia (auth)</td></tr>
