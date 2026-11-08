@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any, AsyncIterator
 import httpx
 from .base import BaseProvider, ModelInfo, ProviderError
+from ..logging import log as _log
 
 BASE = "https://text.pollinations.ai"
 
@@ -38,8 +39,8 @@ class PollinationsProvider(BaseProvider):
                                     upstream_model=mid,
                                     capabilities=(["chat","tools"] if m.get("tools") else ["chat"]) + (["reasoning"] if m.get("reasoning") else []),
                                     note="Anonymous, rate-limited per IP."))
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning("Pollinations list_models failed: %s", e)
         return models
 
     def _prepare(self, payload: dict[str, Any], upstream: str) -> dict[str, Any]:

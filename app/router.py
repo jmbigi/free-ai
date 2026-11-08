@@ -2,6 +2,8 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any, AsyncIterator
+from .observability import metrics as _metrics_obs
+from .logging import log as _log
 from .providers.pollinations import PollinationsProvider
 from .providers.configured import (
     LLM7Provider,
@@ -14,6 +16,7 @@ from .providers.cloudflare import CloudflareProvider
 from .providers.base import ModelInfo, ProviderError
 from .config import settings
 from .tool_support import has_tools, inject_tool_prompt, maybe_synthesize_tool_calls
+
 
 # mid -> unix cooldown-until
 _COOLDOWN: dict[str, float] = {}
@@ -329,6 +332,10 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
             _record(provider.id, ok=False, ms=ms, error=err)
             _mark_cooldown(model.id, _cooldown_for(e))
             attempts.append({"provider": provider.id, "model": model.id, "ok": False, "ms": ms, "error": err, "retryable": _retryable(e)})
+            _log.warning(
+                "%s/%s failed: %s (ms=%d, retryable=%s)",
+                provider.id, model.id, err[:120], ms, _retryable(e),
+            )
             return None
 
     def _raise_final(status: int = 502):
@@ -438,6 +445,10 @@ async def stream_with_fallback(payload: dict[str, Any]) -> AsyncIterator[bytes]:
         except Exception as e:
             err = str(e)[:220]
             errors.append(f"{m.id}: {err}")
+            _log.warning(
+                "stream provider %s failed: %s",
+                m.id, err[:120],
+            )
             _mark_cooldown(m.id, _cooldown_for(e))
             _record(p.id, ok=False, ms=int((time.time() - t0) * 1000), error=err)
             continue

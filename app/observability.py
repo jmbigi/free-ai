@@ -59,5 +59,14 @@ class Metrics:
                 'last_errors': list(self.last_errors)[-10:],
             }
 
+    def record(self, name: str, value: int = 1, **extra: Any) -> None:
+        """Record arbitrary named events (e.g. stream chunk counters) without request status."""
+        with self.lock:
+            key = f"event:{name}"
+            self.by_path[key] = self.by_path.get(key, 0) + value
+            for k, v in (extra or {}).items():
+                self.by_status[f"{key}:{k}"] = self.by_status.get(f"{key}:{k}", 0) + v
+            self.latencies_ms.append(0)
 
 metrics = Metrics()
+

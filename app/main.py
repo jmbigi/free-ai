@@ -705,6 +705,47 @@ for path in ['/v1/decision','/decision','/v1/agent/decision']:
 async def v1_root(_: bool = Depends(require_api_key_flexible)):
     return {"object": "api", "name": "Free AI Gateway", "openai_compatible": True, "endpoints": ["/v1/models", "/v1/chat/completions", "/v1/cache"]}
 
+
+@app.get("/v1/tools")
+@app.get("/openai/v1/tools")
+@app.get("/api/v1/tools")
+async def tools_list(request: Request):
+    """List all standard OpenAI-compatible tool definitions."""
+    from .tools import get_all_tool_definitions
+    all_tools = get_all_tool_definitions()
+    return {
+        "object": "tools",
+        "tools": all_tools,
+        "count": len(all_tools),
+        "description": "Standard OpenAI-compatible tool definitions for function calling",
+    }
+
+
+@app.get("/v1/telemetry")
+@app.get("/telemetry")
+@app.get("/openai/v1/telemetry")
+async def telemetry_response():
+    from .telemetry import telemetry
+    return await telemetry()
+
+
+@app.get("/v1/debug")
+@app.get("/debug")
+@app.get("/openai/v1/debug")
+async def debug_response():
+    from .telemetry import telemetry
+    t = await telemetry()
+    return {
+        "object": "debug",
+        "time": t.get("time"),
+        "requests": t.get("requests"),
+        "runtime": t.get("runtime"),
+        "cache": t.get("cache"),
+        "free_control": t.get("free_control"),
+        "limits": t.get("limits"),
+    }
+
+
 # --- Project generation (ForthTrade IA generates; temp output) ---
 from .project_gen import generate_one as _project_generate_one
 

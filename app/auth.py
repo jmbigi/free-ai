@@ -1,22 +1,25 @@
 from __future__ import annotations
-import hmac, secrets
-import os
+import hmac, secrets, os
 from pathlib import Path
 from fastapi import Header, HTTPException, Query, Request
 from dotenv import dotenv_values
 from .config import settings, _env
+from .logging import log as _log
+
 
 def _expected_key() -> str:
     vals = {}
     try:
         vals = dotenv_values(_env)
-    except Exception:
+    except Exception as e:
+        _log.warning("dotenv_values failed: %s", e)
         vals = {}
     for k in ("API_KEY","FT_AI_API_KEY","FTAI_API_KEY","FREE_AI_API_KEY","GATEWAY_API_KEY"):
         v = vals.get(k) or os.getenv(k) or settings.api_key
         if v:
             return str(v).strip().strip("'\"")
     return ""
+
 
 def _extract_token(request: Request, authorization: str | None, headers: dict[str, str], query: dict[str, str]) -> str | None:
     if authorization and authorization.lower().startswith("bearer "):
@@ -35,6 +38,7 @@ def _extract_token(request: Request, authorization: str | None, headers: dict[st
             return v.strip()
     # JSON body fallback for rare clients
     return None
+
 
 async def require_api_key_flexible(
     request: Request,
@@ -61,14 +65,15 @@ async def require_api_key_flexible(
                     if token is None and isinstance(auth, dict):
                         v = auth.get('api_key') or auth.get('key')
                         if isinstance(v, str): token = v.strip()
-        except Exception:
-            pass
+        except Exception as e:
+            _log.debug("body key extraction failed: %s", e)
     # accept raw Authorization value as token if it matches (some CLIs)
     if token is None and authorization and authorization.strip():
         token = authorization.strip()
-    if not token or not secrets.compare_digest(token, expected):
+    if not token or not hmac.compare_digest(token, expected):
         raise HTTPException(status_code=401, detail={"message": "Invalid or missing API key", "method": "Authorization: Bearer <API_KEY|FT_AI_API_KEY>"})
     return True
+
 
 # backward compat
 async def require_api_key(request: Request, authorization: str | None = Header(default=None), x_api_key: str | None = Header(default=None), key: str | None = Query(default=None)):

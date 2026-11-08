@@ -15,6 +15,7 @@ def _read_env(name: str, default: str = "") -> str:
         return str(v).strip()
     try:
         data = dotenv_values(ENV_FILE)
+        # direct match first
         for k in (name, name.upper(), name.lower()):
             if k in data and data[k] is not None and str(data[k]).strip() != "":
                 return str(data[k]).strip()
@@ -36,8 +37,9 @@ def _read_env(name: str, default: str = "") -> str:
             for k in (alias, alias.upper(), alias.lower()):
                 if k in data and data[k] is not None and str(data[k]).strip() != "":
                     return str(data[k]).strip()
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger("free-ai.config").warning("_read_env(%s) alias lookup failed: %s", name, e)
     return default
 
 

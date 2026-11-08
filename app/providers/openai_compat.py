@@ -13,6 +13,13 @@ _ALLOWED = {
 }
 _DROP = {'provider','route','api_key','apikey','key','prompt','input','access_token','token'}
 
+# Tool-related fields that MUST always pass through even if not in _ALLOWED
+_TOOL_FIELDS = {
+    'tools', 'tool_choice', 'parallel_tool_calls', 'function_call',
+    'tool_prompt', 'tool_output', 'tool_return', 'turn_id',
+}
+
+
 class OpenAICompatProvider(BaseProvider):
     base_url: str = ""
     api_key: str = ""
@@ -61,6 +68,10 @@ class OpenAICompatProvider(BaseProvider):
                 continue
             if k in _ALLOWED or k.startswith('x_'):
                 body[k] = v
+        # Ensure ALL tool fields always pass through (client may send fields not in _ALLOWED)
+        for tf in _TOOL_FIELDS:
+            if tf in payload:
+                body[tf] = payload[tf]
         # ensure chat format for chat/completions
         if 'messages' not in body and 'prompt' in payload:
             p = payload['prompt']

@@ -136,5 +136,7 @@ def cacheable(payload: dict[str, Any]) -> bool:
         if temp is None:
             return True
         return float(temp) <= 0.0001
-    except Exception:
+    except Exception as e:
+        from .logging import log as _log
+        _log.warning("cacheable failed: %s", e)
         return False
