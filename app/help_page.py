@@ -56,6 +56,7 @@ def help_payload(base_url: str = BASE) -> dict:
             "free": f"{v1}/free",
             "cache": f"{v1}/cache",
             "metrics_auth": f"{v1}/metrics",
+            "projects_generate": f"{v1}/projects/generate",
         },
         "quick_test": curl,
         "clients": {
