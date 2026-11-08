@@ -91,6 +91,56 @@ def help_payload(base_url: str = BASE) -> dict:
                 "ui_values": {"Base URL": v1, "API Key": f"${KEY_ENV}", "Model": "auto"},
                 "notes": "Puedes exportar FT_AI_API_KEY y referenciarla en tu entorno/configuración si el cliente lo soporta.",
             },
+            "kimicode_integration": {
+                "title": "Integración KimiCode (Kimi Code) — Paso a paso",
+                "description": "KimiCode es un cliente/harness compatible con OpenAI API. Usa el gateway como endpoint único; no necesitas clave Kimi/Moonshot propia.",
+                "prerequisites": [
+                    "Cuenta en forthtrade IA (obtén tu API key del gateway en https://ia.forthtrade.com/help)",
+                    "KimiCode instalado (VS Code extension, CLI, o editor compatible)",
+                    "Variable de entorno FT_AI_API_KEY configurada"
+                ],
+                "steps": [
+                    {
+                        "step": 1,
+                        "title": "Obtener API Key del gateway",
+                        "action": "Ve a https://ia.forthtrade.com/help, copia tu API key, o genera una nueva en tu panel.",
+                        "code": f"export {KEY_ENV}=\"TU_API_KEY_GATEWAY\""
+                    },
+                    {
+                        "step": 2,
+                        "title": "Configurar KimiCode (VS Code / CLI)",
+                        "action": "Abre settings de KimiCode y configura proveedor OpenAI-compatible:",
+                        "config": {
+                            "provider": "openai-compatible",
+                            "baseURL": v1,
+                            "apiKey": f"${KEY_ENV}",
+                            "model": "auto"
+                        }
+                    },
+                    {
+                        "step": 3,
+                        "title": "Verificar conexión",
+                        "action": "En KimiCode, abre chat y envía un mensaje de prueba. Debe responder sin error 401/403.",
+                        "test_payload": {"model": "auto", "messages": [{"role": "user", "content": "Hola"}], "max_tokens": 64, "temperature": 0}
+                    },
+                    {
+                        "step": 4,
+                        "title": "Usar model=auto (recomendado)",
+                        "action": "El gateway hace fallback automático entre proveedores free-tier (Pollinations, OpenRouter :free, etc.). No selecciones modelo específico salvo necesidad."
+                    },
+                    {
+                        "step": 5,
+                        "title": "Habilitar caché y compresión (opcional)",
+                        "action": "Agrega al payload: cache=true, compress_context=true, temperature=0 para respuestas determinísticas cacheables y contextos largos."
+                    }
+                ],
+                "troubleshooting": [
+                    {"issue": "401 Unauthorized", "fix": "Verifica FT_AI_API_KEY correcta y exportada. Reinicia KimiCode/editor."},
+                    {"issue": "Modelo no responde / timeout", "fix": "El gateway usa fallback. Espera 10-30s o reintenta; Pollinations anónimo tiene rate limit ~45s/IP."},
+                    {"issue": "Quiero usar Kimi/Moonshot directo", "fix": "No configures clave Kimi en el cliente. El gateway la gestiona server-side si está en .env (MOONSHOT_API_KEY)."}
+                ],
+                "limitations": "Gratis/controlado ≠ ilimitado. FREE_ONLY bloquea modelos no free-tier. Cuotas/rate limits/capacidad variable upstream."
+            }
         },
     }
 
@@ -133,6 +183,7 @@ model   = "auto"</pre><p class="m">Configura el gateway como endpoint compatible
 base_url = "{v1}"
 api_key  = "${key}"
 model    = "auto"</pre><p class="m">Apunta al gateway con la key del gateway. Kimi/Moonshot upstream depende de la configuración/política del servidor.</p></div>
+<div class="card"><h2>KimiCode — Integración paso a paso</h2><ol style="margin:8px 0;"><li><b>Obtener clave:</b> abre <code>{pub}/help</code>, copia tu API key del gateway.</li><li><b>Exportar:</b> <code>export {key}="TU_API_KEY_GATEWAY"</code></li><li><b>KimiCode settings:</b> proveedor OpenAI-compatible → <code>baseURL</code>: <code>{v1}</code>, <code>apiKey</code>: <code>${key}</code>, <code>model</code>: <code>auto</code></li><li><b>Probar:</b> envía un mensaje en KimiCode; debe responder sin error 401/403.</li><li><b>Cache/compresión:</b> usa <code>cache=true</code>, <code>compress_context=true</code>, <code>temperature=0</code> para respuestas determinísticas y contextos largos.</li></ol><p class="m m-limit">No configures claves Kimi/Moonshot upstream en KimiCode; el gateway gestiona la autenticación server-side.</p></div>
 <div class="card"><h2>DeepSeek harness</h2><pre>export {key}="TU_API_KEY_GATEWAY"
 export OPENAI_BASE_URL="{v1}"
 export OPENAI_API_KEY="${key}"
