@@ -33,12 +33,22 @@ app = FastAPI(title="jmbigi/thinker local bridge", version="0.1.0")
 GATEWAY_BASE_URL = os.environ.get("FORTHTRADE_BASE_URL", "http://127.0.0.1:8000/v1")
 GATEWAY_MODEL = os.environ.get("FORTHTRADE_MODEL", "auto")
 LLM_TIMEOUT = float(os.environ.get("THINKER_LLM_TIMEOUT", "45"))
+REQUIRED_STEPS = [
+    "analysis",
+    "plan",
+    "search_strategy",
+    "search_results",
+    "claim_extraction",
+    "evidence_eval",
+    "synthesis",
+]
 
 
 class ThinkRequest(BaseModel):
     prompt: str = Field(min_length=1)
     provider: str = "gateway"  # gateway | mock
     model: str | None = None
+    # Accepted for client compatibility, but the bridge always runs all 7 steps.
     max_steps: int = 7
     use_tot: bool = False
 
@@ -86,6 +96,7 @@ def health() -> dict[str, Any]:
         "gateway_model": GATEWAY_MODEL,
         "llm_timeout_s": LLM_TIMEOUT,
         "layers": ["DeepResearchThinkingLayer", "VeracityLayer"],
+        "steps_required": REQUIRED_STEPS,
     }
 
 
@@ -94,7 +105,8 @@ def think(req: ThinkRequest) -> dict[str, Any]:
     llm, model, simulated = _provider(req)
     started = time.time()
     layer = DeepResearchThinkingLayer(llm_provider=llm, name="free-ai-thinker")
-    layer.max_steps = max(1, min(7, int(req.max_steps or 7)))
+    # Mandatory 7-step pipeline: never reduced by a client request.
+    layer.max_steps = len(REQUIRED_STEPS)
     try:
         result = layer.think_tot(req.prompt) if req.use_tot else layer.think(req.prompt)
     except Exception as exc:
@@ -108,6 +120,8 @@ def think(req: ThinkRequest) -> dict[str, Any]:
         "duration_ms": int((time.time() - started) * 1000),
         "valid": bool(result.get("valid")),
         "confidence": result.get("confidence"),
+        "steps_expected": len(REQUIRED_STEPS),
+        "steps_declared": REQUIRED_STEPS,
         "step_count": result.get("step_count"),
         "steps": result.get("steps") or [],
         "thought": result.get("thought"),

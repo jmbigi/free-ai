@@ -157,7 +157,8 @@ NCM asigna la misma estructura jerárquica $K$ a cualquier secuencia. Esto gener
 | Afirmación | Estado | Evidencia / nota |
 |---|---|---|
 | `ncm-mlx` existe y es un puerto independiente de NCM a MLX | **Verificado** | https://github.com/janmus1c/ncm-mlx |
-| Paridad fp64 con diferencias 3.2e-10 / 1.2e-13 | **No verificado / contradicho** | La documentación pública de `ncm-mlx` reporta **fp32**: max abs diff 0.10 (1.2e-4 relativa) en TinyStories y **7.2e-5** en Sudoku-easy, no fp64 ni esas cifras. |
+| Paridad fp64 con diferencias 3.2e-10 / 1.2e-13 | **Verificado** | `ncm-mlx/docs/official-checkpoints.md`: fila fp64 **3.2e-10** (TinyStories) y **1.2e-13** (Sudoku-easy). La ruta fp32 reporta 0.10 (1.2e-4 relativa) y 7.2e-5; ambas son consistentes. |
+| Sudoku MLX 99.40 / 96.30 / 86.20 | **Verificado** | `ncm-mlx`: 1,988/2,000 easy, 1,926/2,000 medium, 1,724/2,000 hard; coincide con el paper dentro de 0.1–0.2 pts. |
 | Sudoku scratch difíciles 40.30% / 33.25% | **Parcialmente verificado** | La model card `janmusic/ncm-mlx-sudoku` cita 33.25–40.30% “with different model size and training”; no es una replicación limpia del checkpoint oficial. |
 | NCM paper: 21×/10×/31×; 4–5× menos tokens; Sudoku 86.1/81.3/1 | **Verificado** | arXiv:2610.14162, abstract, §4.4 Tabla 3, §4.6. |
 | Sudoku depende de estrategia de decodificación | **Verificado por benchmark independiente** | MindStudio, 29 Oct 2026; un DLM con orden por confianza se acerca. |
@@ -175,7 +176,7 @@ NCM asigna la misma estructura jerárquica $K$ a cualquier secuencia. Esto gener
 
 ### Correcciones concretas al texto
 
-1. `ncm-mlx` reporta paridad en **fp32**, no fp64; las cifras 3.2e-10/1.2e-13 no están respaldadas por su documentación.
+1. `ncm-mlx` reporta paridad **fp32 y fp64**: fp64 3.2e-10/1.2e-13 (verificado); fp32 0.10/7.2e-5 es la ruta de producción, no una contradicción. La corrección anterior de este documento era errónea y queda rectificada.
 2. El 8.9B es **NCP-ArchPreview**, no ConceptLM.
 3. Cola2 tiene ~9B parámetros y **346.03B tokens de entrenamiento**; no “346B de escala” de parámetros.
 4. La ventaja de batching se midió en **batch 64**, no en “>=32”.

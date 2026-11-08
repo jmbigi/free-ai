@@ -1,5 +1,8 @@
 # NCM: evidencia verificada y límites (2026-11-08)
 
+> Referencia principal consolidada: [ncm-primary-reference.md](ncm-primary-reference.md).
+> Este documento es un anexo de verificación y límites.
+
 Regla asociada: `AGENTS.md` → regla 14 (NCM como tercera vía, evidencia dual).
 
 ## Paper primario
@@ -75,8 +78,8 @@ https://huggingface.co/ByteDance-Seed/Cola2
 
 - `docs/references/ncm-critical-review.md`: revisión crítica con formalismo,
   tabla comparativa y preguntas abiertas. Incluye una sección de verificación
-  que corrige las cifras fp64 de `ncm-mlx` (la documentación pública reporta
-  fp32) y aclara que 8.9B corresponde a NCP-ArchPreview, no a ConceptLM.
+  que confirma la paridad fp64/fp32 de `ncm-mlx` y las tasas Sudoku, y aclara
+  que 8.9B corresponde a NCP-ArchPreview, no a ConceptLM.
 
 ## Metodología de benchmark aportada por el programador
 

@@ -68,6 +68,10 @@ No exponer `0.0.0.0:8000` a Internet: bypassa HTTPS y la redacción de logs. Pú
 - `docs/references/ncm-2610.14162.md` — resumen verificable del paper NCM (arXiv:2610.14162v1), límites y relevancia. Referencia externa, no dependencia.
 - `docs/progress/2026-11-08-saga-generation.md` — estado real de la generación del proyecto saga vía KimiCode + ForthTrade IA, diagnóstico de throttling free-tier y próximos pasos.
 
+## Referencias principales
+- [NCM: fundamentos, ecosistema y evaluación crítica](docs/references/ncm-primary-reference.md) — **referencia principal**.
+- [Índice de referencias](docs/references/README.md) — paper NCM, `ncm-mlx`, NCP/ConceptLM, Cola2, Roofline y thinker.
+
 ## Limitación real (obligatoria)
 **Gratis/controlado ≠ ilimitado.** `FREE_ONLY` prioriza candidatos free-tier/anónimos explícitos, pero proveedores upstream imponen cuotas, rate limits, créditos, términos o capacidad variable. El gateway maximiza disponibilidad; **no garantiza inferencia remota avanzada gratuita ilimitada**. Reportar estado con evidencia (`/v1/audit`, `/v1/metrics`, `attempts`).
 
