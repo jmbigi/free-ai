@@ -45,6 +45,8 @@ def extract_files(text: str) -> list[dict[str, str]]:
     return out
 
 
+_LOG_FMT_RE = re.compile(r'logger\.(debug|info|warning|error|exception|critical)\s*\(([^)]{0,400})\)')
+
 def _quality_notes(files: list[dict[str, str]]) -> list[dict[str, Any]]:
     notes = []
     for f in files:
@@ -54,6 +56,13 @@ def _quality_notes(files: list[dict[str, str]]) -> list[dict[str, Any]]:
                 notes.append({'path': f['path'], 'check': 'python_ast', 'ok': True})
             except Exception as e:
                 notes.append({'path': f['path'], 'check': 'python_ast', 'ok': False, 'error': str(e)[:220]})
+            # heuristic: %d with common non-int identifiers
+            for m in _LOG_FMT_RE.finditer(f['content']):
+                call = m.group(2)
+                if '%d' in call and re.search(r'\b(token|uuid|idempot|request_id|trace_id|saga_id|corr|key|name|msg|message)\b', call, re.I) and '%s' not in call.split('%d')[0][-20:]:
+                    notes.append({'path': f['path'], 'check': 'logging_format_heuristic', 'ok': False,
+                                  'warning': 'Possible %d used for non-int value (e.g. token/UUID/str). Prefer %s or f-string.', 'sample': call[:180]})
+                    break
         elif f['path'].endswith('.json'):
             try:
                 json.loads(f['content'])
@@ -84,7 +93,9 @@ async def generate_one(*, prompt: str, name: str, model: str = 'auto', max_token
         'You are a senior software engineer. Generate correct, production-minded, honest code/design. '
         'Declare dependencies and limitations. Return files using this exact format for every file:\n'
         '### FILE: relative/path.ext\n```lang\n<content>\n```\n'
-        'Rules: no absolute paths, no "..", include README/tests when useful, keep code coherent and runnable where possible.'
+        'Rules: no absolute paths, no "..", include README/tests when useful, keep code coherent and runnable where possible. '
+        'Quality: match placeholders to types (logging `%d` only for real ints; use `%s` for UUID/str/objects), handle errors explicitly, '
+        'avoid hidden mutable defaults, make retries/idempotency deterministic in simulations, and prefer simple testable interfaces.'
     )
     payload = {
         'model': model, 'temperature': temperature, 'max_tokens': max(256, min(4000, max_tokens)),
