@@ -588,7 +588,7 @@ async def _responses(request: Request, _: bool = Depends(require_api_key_flexibl
         if key:
             cached = response_cache.get(key)
             if cached:
-                text = ((cached.get('choices') or [{}])[0].get('message') or {}).get('content','')
+                m=((cached.get('choices') or [{}])[0].get('message') or {}); text = m.get('content') or m.get('reasoning') or ''
                 resp = {'id': cached.get('id') or f"resp_{uuid.uuid4().hex[:24]}", 'object':'response','created_at':cached.get('created') or int(time.time()),'model':cached.get('model'),'status':'completed','output_text':text,'output':[{'type':'message','role':'assistant','content':[{'type':'output_text','text':text}]}],'gateway':{**(cached.get('gateway') or {}), 'cache':{'hit':True}}}
                 return JSONResponse(resp)
         try:
@@ -598,7 +598,7 @@ async def _responses(request: Request, _: bool = Depends(require_api_key_flexibl
             atts = getattr(e, 'attempts', None)
             if atts: detail["attempts"] = atts; detail["attempt_count"] = len(atts)
             raise HTTPException(status_code=e.status, detail=detail)
-        text = ((data.get('choices') or [{}])[0].get('message') or {}).get('content','')
+        m=((data.get('choices') or [{}])[0].get('message') or {}); text = m.get('content') or m.get('reasoning') or ''
         resp = {'id': f"resp_{uuid.uuid4().hex[:24]}", 'object':'response','created_at':data.get('created') or int(time.time()),'model':data.get('model'),'status':'completed','output_text':text,'output':[{'type':'message','role':'assistant','content':[{'type':'output_text','text':text}]}],'usage':data.get('usage'),'gateway':data.get('gateway')}
         if key and text:
             response_cache.set(key, data, int(getattr(settings, 'cache_ttl_seconds', 300)))
@@ -685,8 +685,9 @@ async def _decision(request: Request, _: bool = Depends(require_api_key_flexible
     optimized = compress_messages(copy.deepcopy(payload))
     try:
         data, _ = await execute_with_fallback(optimized)
-        answer = ((data.get('choices') or [{}])[0].get('message') or {}).get('content','')
-        return {'object':'decision','objective':objective,'answer':answer,'search':search_result,'knowledge':{'matches':kb.get('count',0)},'gateway':data.get('gateway'),'model':data.get('model')}
+        msg=((data.get('choices') or [{}])[0].get('message') or {}); answer = msg.get('content') or ''
+        if not answer and not msg.get('tool_calls'): answer = msg.get('reasoning') or msg.get('reasoning_content') or ''
+        return {'object':'decision','ok': bool(answer),'objective':objective,'answer':answer or '','search':search_result,'knowledge':{'matches':kb.get('count',0)},'gateway':data.get('gateway'),'model':data.get('model')}
     except ProviderError as e:
         detail = {"message": str(e), "type": "provider_error", "provider": e.provider, "code": e.status}
         atts = getattr(e,'attempts',None);

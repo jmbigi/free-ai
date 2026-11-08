@@ -99,6 +99,7 @@ async def generate_one(*, prompt: str, name: str, model: str = 'auto', max_token
             g = data.get('gateway') or {}
             msg = ((data.get('choices') or [{}])[0].get('message') or {})
             content = msg.get('content') or ''
+            if not content and not msg.get('tool_calls'): content = msg.get('reasoning') or msg.get('reasoning_content') or ''
             ok = bool(content and not data.get('detail') and not data.get('error'))
             meta = {'attempt': attempt, 'ok': ok, 'selected': g.get('selected') or data.get('model'),
                     'gateway_attempts': len(attempts or g.get('attempts') or []), 'fallback_used': g.get('fallback_used')}

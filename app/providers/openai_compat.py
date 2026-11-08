@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any, AsyncIterator
 import httpx
 from .base import BaseProvider, ModelInfo, ProviderError
+from ..normalize import normalize_chat_response
 
 _ALLOWED = {
     'messages','model','frequency_penalty','logit_bias','logprobs','top_logprobs','max_tokens','max_completion_tokens',
@@ -77,7 +78,7 @@ class OpenAICompatProvider(BaseProvider):
         if isinstance(data, dict):
             data["provider"] = self.id
             data["requested_model"] = model.id
-        return data
+        return normalize_chat_response(data)
 
     async def stream_chat(self, payload: dict[str, Any], model: ModelInfo) -> AsyncIterator[bytes]:
         body = self._prepare(payload, model.upstream_model or model.id)
