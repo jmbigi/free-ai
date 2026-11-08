@@ -1,0 +1,185 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-11-08T22:47:02.588177+00:00",
+  "service": {
+    "base_url": "http://127.0.0.1:11436",
+    "model": "ncm-lm1b-large",
+    "health": {
+      "status": "ok",
+      "model": "ncm-lm1b-large",
+      "loaded": true,
+      "params": 724800640,
+      "load_s": 13.765,
+      "vram_mb": 3410.4,
+      "unconditional": true,
+      "prompt_ignored": true,
+      "fixed_length": 128
+    }
+  },
+  "config": {
+    "batches": [
+      1,
+      2,
+      4
+    ],
+    "repeats": 5,
+    "warmup": 1,
+    "temperature": 1.0,
+    "seed": 0,
+    "tokens_per_sample": 128,
+    "max_server_batch": 4
+  },
+  "cases": [
+    {
+      "batch": 1,
+      "repeats": 5,
+      "warmup": 1,
+      "tokens_generated_per_request": 128,
+      "latencies_ms": [
+        329.581,
+        341.488,
+        343.77,
+        341.001,
+        332.711
+      ],
+      "latency_summary_ms": {
+        "count": 5,
+        "min": 329.5805130037479,
+        "p50": 341.00117499474436,
+        "p95": 343.76950800651684,
+        "max": 343.76950800651684,
+        "mean": 337.71006299648434
+      },
+      "throughput_tokens_s": [
+        388.372,
+        374.83,
+        372.343,
+        375.365,
+        384.718
+      ],
+      "throughput_summary_tokens_s": {
+        "count": 5,
+        "min": 372.3425057162822,
+        "p50": 375.3652755066688,
+        "p95": 388.37247637436747,
+        "max": 388.37247637436747,
+        "mean": 379.1257118391667
+      },
+      "response_checks": {
+        "all_valid": true,
+        "all_usage_match_batch": true,
+        "choices_count": 1,
+        "single_choice_for_batch": false,
+        "prompt_ignored": true,
+        "unconditional": true,
+        "fixed_length": 128,
+        "content_chars": 461,
+        "reported_completion_tokens": 128,
+        "expected_completion_tokens": 128
+      }
+    },
+    {
+      "batch": 2,
+      "repeats": 5,
+      "warmup": 1,
+      "tokens_generated_per_request": 256,
+      "latencies_ms": [
+        464.408,
+        463.485,
+        462.78,
+        463.349,
+        466.617
+      ],
+      "latency_summary_ms": {
+        "count": 5,
+        "min": 462.78013501432724,
+        "p50": 463.4846519911662,
+        "p95": 466.61715902155265,
+        "max": 466.61715902155265,
+        "mean": 464.1277756076306
+      },
+      "throughput_tokens_s": [
+        551.24,
+        552.338,
+        553.178,
+        552.499,
+        548.63
+      ],
+      "throughput_summary_tokens_s": {
+        "count": 5,
+        "min": 548.6296314880601,
+        "p50": 552.3375993146786,
+        "p95": 553.178454801381,
+        "max": 553.178454801381,
+        "mean": 551.5768992688356
+      },
+      "response_checks": {
+        "all_valid": true,
+        "all_usage_match_batch": false,
+        "choices_count": 1,
+        "single_choice_for_batch": true,
+        "prompt_ignored": true,
+        "unconditional": true,
+        "fixed_length": 128,
+        "content_chars": 525,
+        "reported_completion_tokens": 128,
+        "expected_completion_tokens": 256
+      }
+    },
+    {
+      "batch": 4,
+      "repeats": 5,
+      "warmup": 1,
+      "tokens_generated_per_request": 512,
+      "latencies_ms": [
+        755.816,
+        754.647,
+        757.364,
+        757.583,
+        759.317
+      ],
+      "latency_summary_ms": {
+        "count": 5,
+        "min": 754.6472690009978,
+        "p50": 757.3636079905555,
+        "p95": 759.3166519945953,
+        "max": 759.3166519945953,
+        "mean": 756.9453992007766
+      },
+      "throughput_tokens_s": [
+        677.413,
+        678.463,
+        676.029,
+        675.833,
+        674.29
+      ],
+      "throughput_summary_tokens_s": {
+        "count": 5,
+        "min": 674.290493505,
+        "p50": 676.029313526753,
+        "p95": 678.462668628995,
+        "max": 678.462668628995,
+        "mean": 676.4058294300809
+      },
+      "response_checks": {
+        "all_valid": true,
+        "all_usage_match_batch": false,
+        "choices_count": 1,
+        "single_choice_for_batch": true,
+        "prompt_ignored": true,
+        "unconditional": true,
+        "fixed_length": 128,
+        "content_chars": 570,
+        "reported_completion_tokens": 128,
+        "expected_completion_tokens": 512
+      }
+    }
+  ],
+  "limitations": [
+    "NCM LM1B-large is unconditional and ignores prompts.",
+    "The server caps n at 4 and serializes generation with a lock.",
+    "For n > 1 the server generates n samples but returns only the first choice and reports 128 completion tokens; this benchmark computes tokens as 128*n and records the mismatch.",
+    "This is a local RTX 3070 Laptop 8 GB capacity measurement, not a fair NCM vs AR comparison.",
+    "No energy, Nsight Compute, H100, NCP or Cola2 measurements are included."
+  ]
+}

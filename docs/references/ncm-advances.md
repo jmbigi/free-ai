@@ -119,7 +119,9 @@ https://huggingface.co/ByteDance-Seed/Cola2
   (seed 1) son modelos más pequeños y recetas distintas, no una replicación
   limpia del entrenamiento oficial.
 - **Benchmark completo:** la comparación NCM vs AR vs NCP vs Cola2 con FLOPs,
-  HBM, latencia, throughput y energía **no se ejecutó**; sigue pendiente.
+  HBM, latencia, throughput y energía **no se ejecutó**; sigue pendiente. Sí
+  existe una medición local NCM-only de capacidad:
+  `docs/progress/2026-11-08-ncm-local-benchmark.md`.
 
 ## Implicaciones para este repositorio
 

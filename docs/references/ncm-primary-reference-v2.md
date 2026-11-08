@@ -757,6 +757,11 @@ corregido y lo que sigue siendo una propuesta no ejecutada.
   128 tokens): **522,9 tok/s**, 3.838 MB de VRAM pico. Es una medición local de
   generación unconditional, **no** una comparación NCM vs AR y **no** un
   resultado de H100.
+- Benchmark HTTP reproducible añadido el 2026-11-08:
+  `local/ncm/benchmark_ncm.py`. Medición NCM-only, batches 1/2/4, 5 repeticiones:
+  p50 **341,0/463,5/757,4 ms**; p50 throughput **375,4/552,3/676,0 tok/s**.
+  Evidencia: `docs/progress/2026-11-08-ncm-local-benchmark.md` y `.json`.
+  Sigue siendo capacity local, no el benchmark completo NCM vs AR/NCP/Cola2.
 - `ollama.service` y `ncm-instruct.service`: **inactivos**. No se iniciaron,
   detuvieron ni modificaron servicios para esta revisión.
 
