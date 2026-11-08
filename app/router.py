@@ -83,6 +83,15 @@ def _record(pid: str, *, ok: bool, ms: int | None = None, error: str = ""):
         s["ema_ms"] = int(ms if prev is None else (prev * 0.7 + ms * 0.3))
     if error:
         s["last_error"] = error[:300]
+    try:
+        _metrics_obs.metrics.update_provider_stats(pid, {
+            "ok": s.get("ok", 0), "fail": s.get("fail", 0),
+            "last_ok": s.get("last_ok"), "last_fail": s.get("last_fail"),
+            "last_error": s.get("last_error") or "",
+            "latency_ms": s.get("latency_ms"), "ema_ms": s.get("ema_ms"),
+        })
+    except Exception:
+        pass
 
 
 def runtime_status() -> dict[str, Any]:

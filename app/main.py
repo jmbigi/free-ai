@@ -66,6 +66,12 @@ async def observability_middleware(request: Request, call_next):
     t0 = time.time()
     status = 500
     err_msg = ""
+    conn_id = metrics.connection_start(
+        path=request.url.path,
+        method=request.method,
+        client_ip=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent") or "",
+    )
     try:
         # cheap body-size guard for mutating JSON endpoints
         if request.method in ("POST", "PUT", "PATCH"):
@@ -83,7 +89,16 @@ async def observability_middleware(request: Request, call_next):
         raise
     finally:
         ms = int((time.time() - t0) * 1000)
-        metrics.observe(path=request.url.path, status=status, ms=ms, request_id=rid, error=err_msg)
+        metrics.connection_end(conn_id=conn_id, status=status)
+        metrics.observe(
+            path=request.url.path,
+            status=status,
+            ms=ms,
+            request_id=rid,
+            error=err_msg,
+            method=request.method,
+            client_ip=request.client.host if request.client else "",
+        )
 
 
 @app.exception_handler(HTTPException)
@@ -727,6 +742,13 @@ async def tools_list(request: Request):
 async def telemetry_response():
     from .telemetry import telemetry
     return await telemetry()
+
+
+@app.get("/v1/connections")
+@app.get("/connections")
+@app.get("/openai/v1/connections")
+async def connections_response():
+    return metrics.snapshot()
 
 
 @app.get("/v1/debug")
