@@ -224,6 +224,8 @@ def _cooldown_for(exc: Exception) -> float:
         return 46.0
     if 'pollinations' in msg and status in (500, 502, 503, 504):
         return 4.0
+    if 'unavailable for free' in msg or 'paid ver' in msg or 'no endpoints found' in msg:
+        return 1800.0
     if status == 402 or 'insufficient' in msg or 'credit' in msg or 'balance' in msg or 'budget' in msg:
         return 120.0
     if status == 429 or '429' in msg or 'rate limit' in msg or 'quota' in msg or 'free limit' in msg:
