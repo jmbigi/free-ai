@@ -23,8 +23,10 @@ La primera ejecución parecía colgada porque:
 ## Causa raíz de los fallos posteriores
 
 1. **Cuota free agotada:** OpenRouter `429 free-models-per-day`; LLM7 `429 Daily token quota exceeded`; Pollinations `1 reply every 45 seconds per IP`.
-2. **Bloqueo abierto de KimiCode:** interpreta un stream sin `usage` terminal como `Chat Completions provider returned invalid or omitted terminal usage`. Con el throttle activo, `turnStep 0.1` completa (`outputTokens=1500`), pero `turnStep 0.2` y siguientes fallan con ese error aunque el gateway responde `200`. Un `curl` directo al mismo endpoint sí recibe el chunk `usage` y `[DONE]`; falta capturar la petición/respuesta exacta del segundo turno de KimiCode (proxy local o log de stream) para aislar la diferencia. No está resuelto.
-3. Bug de observabilidad: `router._record` llamaba `_metrics_obs.metrics.update_provider_stats`, pero `_metrics_obs` ya es el objeto `Metrics`. Antes estaba oculto por `except: pass`; ahora se corrigió a `_metrics_obs.update_provider_stats` y las métricas por proveedor vuelven a registrarse.
+2. **Causa capturada con proxy local:** el error `Chat Completions provider returned invalid or omitted terminal usage` (`type=upstream_error`, `code=usage_missing`) lo emite el backend anónimo de Pollinations, no el gateway ni KimiCode. Se reproduce cuando el request incluye `reasoning_effort` (KimiCode lo agrega desde `turnStep 0.2`). `curl` sin ese campo recibe `200`, `usage` y `[DONE]`.
+3. **Fix aplicado:** `PollinationsProvider._prepare` descarta `reasoning_effort` y `prompt_cache_key`; KimiCode local usa el alias `auto-nothink` (`capabilities = []`) para no enviar `reasoning_effort`. Ya no aparece `usage_missing`.
+4. **Bloqueo restante:** Pollinations anónimo devuelve `completion_tokens=1500` y `finish_reason=length` incluso con default `CHAT_DEFAULT_MAX_TOKENS=4000`. El primer turno consume 1500 tokens en razonamiento/tool call; los siguientes vuelven vacíos (`APIEmptyResponseError` de KimiCode: “empty response ... finishReason=truncated”). Falta más cuota de salida, otro proveedor free o un agente/prompt más liviano. No hay proyecto generado ni tests todavía.
+5. Bug de observabilidad: `router._record` llamaba `_metrics_obs.metrics.update_provider_stats`, pero `_metrics_obs` ya es el objeto `Metrics`. Antes estaba oculto por `except: pass`; ahora se corrigió a `_metrics_obs.update_provider_stats` y las métricas por proveedor vuelven a registrarse.
 
 ## Cambios aplicados para compatibilidad free-tier
 
@@ -40,17 +42,20 @@ La primera ejecución parecía colgada porque:
 - Prompt: `/tmp/saga_prompt.txt` (Python 3.11+ stdlib, SQLite/WAL, saga/compensaciones/retries/idempotencia/DLQ/recovery/tests unittest).
 - Runs en background con `timeout 2400`, stdout `/tmp/saga_run_out.txt`, stderr `/tmp/saga_run_err.txt`.
 - Evidencia de throttling: journal con `free-tier throttle pollinations: waiting ...`; requests `POST /v1/chat/completions` `200` espaciadas ~46s.
-- Evidencia de sesión: `turnStep 0.1` OK con `outputTokens=1500`; `turnStep 0.2`+ `APIStatusError: Chat Completions provider returned invalid or omitted terminal usage`.
+- Evidencia capturada (proxy local 8010, headers `authorization` redactados):
+  - `turnStep 0.1`: `200`, `usage`, `tool_calls`, `completion_tokens=1500`.
+  - Con `reasoning_effort`: `200` + evento SSE de Pollinations `usage_missing` (sin `usage`/`[DONE]`).
+  - Sin `reasoning_effort`: `200`, `usage`, `[DONE]`, pero `finish_reason=length` y contenido vacío; KimiCode reporta `APIEmptyResponseError`.
+- Alias KimiCode `auto-nothink` agregado en `~/.kimi-code/config.toml` (config local, no versionada).
 - Run detenido para no seguir consumiendo cuota en loop. Sesiones KimiCode en `~/.kimi-code/session_index.jsonl`; reanudar con `kimi -S <sessionId> -p "..."`.
 - Aún **no hay proyecto generado ni tests ejecutados**; no afirmar lo contrario.
 
 ## Próximos pasos
 
-1. Capturar request/response SSE de KimiCode `turnStep 0.2` con un proxy local (o instrumentación temporal del gateway) y comparar con el `curl` directo que sí trae `usage`.
-2. Corregir compatibilidad (posiblemente el formato del chunk de usage cuando el turno anterior fue truncado) o configurar KimiCode sin streaming/thinking si el provider lo permite.
-3. Repetir generación, extraer bloques `### FILE:` con el parser de `app/project_gen.py` a un directorio temporal seguro.
-4. Ejecutar `python -m unittest discover -s tests -v`; si falla, reanudar KimiCode con el error exacto.
-5. Documentar evidencia final (archivos, tests, intentos de gateway) y limitaciones de cuota.
+1. Conseguir salida >1500 tokens: otra cuenta/proveedor free con cuota disponible, o un agente/prompt más pequeño que complete el proyecto en un solo turno.
+2. Repetir generación, extraer bloques `### FILE:` con el parser de `app/project_gen.py` a un directorio temporal seguro.
+3. Ejecutar `python -m unittest discover -s tests -v`; si falla, reanudar KimiCode con el error exacto.
+4. Documentar evidencia final (archivos, tests, intentos de gateway) y limitaciones de cuota.
 
 ## Evidencia relacionada
 

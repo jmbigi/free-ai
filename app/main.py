@@ -234,6 +234,10 @@ def _normalize_payload(payload: Any) -> dict[str, Any]:
     body.pop("max_completion_tokens", None)
     if "max_output_tokens" in body and "max_tokens" not in body:
         body["max_tokens"] = body.get("max_output_tokens")
+    if "max_tokens" not in body:
+        # Providers may default to a too-small budget (Pollinations: 1500),
+        # truncating reasoning/tool calls. Keep a configurable sane default.
+        body["max_tokens"] = settings.chat_default_max_tokens
     if "messages" not in body and "prompt" in body:
         prompt = body.get("prompt")
         if isinstance(prompt, list):
@@ -604,6 +608,7 @@ def _responses_to_chat(body: dict[str, Any]) -> dict[str, Any]:
     out.setdefault('model','auto')
     if 'max_output_tokens' in out and 'max_tokens' not in out:
         out['max_tokens'] = out.pop('max_output_tokens')
+    out.setdefault('max_tokens', settings.chat_default_max_tokens)
     return out
 
 async def _responses(request: Request, _: bool = Depends(require_api_key_flexible)):

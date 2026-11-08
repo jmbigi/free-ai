@@ -74,6 +74,10 @@ class SettingsProxy:
         return _read_int("REQUEST_TIMEOUT", 120)
 
     @property
+    def chat_default_max_tokens(self) -> int:
+        return max(1, min(8192, _read_int("CHAT_DEFAULT_MAX_TOKENS", 4000)))
+
+    @property
     def app_name(self) -> str:
         return _read_env("APP_NAME", "Free AI Gateway")
 

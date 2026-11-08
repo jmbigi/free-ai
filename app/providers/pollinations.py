@@ -44,7 +44,9 @@ class PollinationsProvider(BaseProvider):
         return models
 
     def _prepare(self, payload: dict[str, Any], upstream: str) -> dict[str, Any]:
-        drop = {"model","provider","route","api_key","apikey","key","prompt","input","access_token","token"}
+        # reasoning_effort is not supported by Pollinations' anonymous backend and
+        # can make it abort the stream with "usage_missing" after a 200 response.
+        drop = {"model","provider","route","api_key","apikey","key","prompt","input","access_token","token","reasoning_effort","prompt_cache_key"}
         body = {k: v for k, v in payload.items() if k not in drop}
         if 'messages' not in body and 'prompt' in payload:
             p = payload['prompt']; body['messages']=[{'role':'user','content': "\n".join(p) if isinstance(p,list) else str(p)}]
