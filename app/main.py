@@ -335,7 +335,7 @@ async def _free_response(_: bool = Depends(require_api_key_flexible)):
     }
 
 for path in ['/v1/free','/free','/openai/v1/free','/api/v1/free']:
-    app.add_api_route(path, _free_response, methods=['GET'], dependencies=[Depends(require_api_key_flexible)])
+    app.add_api_route(path, _free_response, methods=["GET","POST"], dependencies=[Depends(require_api_key_flexible)])
 
 async def _status_response(_: bool = Depends(require_api_key_flexible)):
     providers, models = await catalog()
@@ -363,7 +363,7 @@ async def _status_response(_: bool = Depends(require_api_key_flexible)):
     }
 
 for path in ["/v1/status", "/status", "/openai/v1/status", "/api/v1/status"]:
-    app.add_api_route(path, _status_response, methods=["GET"], dependencies=[Depends(require_api_key_flexible)])
+    app.add_api_route(path, _status_response, methods=["GET","POST"], dependencies=[Depends(require_api_key_flexible)])
 
 
 
@@ -391,7 +391,7 @@ async def _audit_response(_: bool = Depends(require_api_key_flexible)):
     }
 
 for path in ['/v1/audit','/audit','/openai/v1/audit','/api/v1/audit']:
-    app.add_api_route(path, _audit_response, methods=['GET'], dependencies=[Depends(require_api_key_flexible)])
+    app.add_api_route(path, _audit_response, methods=["GET","POST"], dependencies=[Depends(require_api_key_flexible)])
 
 async def _models_response(_: bool = Depends(require_api_key_flexible)):
     providers, models = await catalog()
@@ -403,14 +403,14 @@ async def _models_response(_: bool = Depends(require_api_key_flexible)):
     return {"object": "list", "providers": providers, "data": data}
 
 for path in ["/v1/models", "/models", "/openai/v1/models", "/api/v1/models"]:
-    app.add_api_route(path, _models_response, methods=["GET"], dependencies=[Depends(require_api_key_flexible)])
+    app.add_api_route(path, _models_response, methods=["GET","POST"], dependencies=[Depends(require_api_key_flexible)])
 
 async def _providers_response(_: bool = Depends(require_api_key_flexible)):
     providers, _ = await catalog()
     return {"object": "list", "data": providers}
 
 for path in ["/v1/providers", "/providers", "/openai/v1/providers", "/api/v1/providers"]:
-    app.add_api_route(path, _providers_response, methods=["GET"], dependencies=[Depends(require_api_key_flexible)])
+    app.add_api_route(path, _providers_response, methods=["GET","POST"], dependencies=[Depends(require_api_key_flexible)])
 
 async def _cache_info(_: bool = Depends(require_api_key_flexible)):
     return {"object": "cache", **response_cache.info()}
@@ -530,7 +530,7 @@ async def _metrics_response(_: bool = Depends(require_api_key_flexible)):
     return {'object':'metrics','time':int(time.time()), **metrics.snapshot(), 'runtime': runtime_status(), 'free_control': free_control_info()}
 
 for path in ['/v1/metrics','/metrics']:
-    app.add_api_route(path, _metrics_response, methods=['GET'], dependencies=[Depends(require_api_key_flexible)])
+    app.add_api_route(path, _metrics_response, methods=["GET","POST"], dependencies=[Depends(require_api_key_flexible)])
 
 
 def _responses_to_chat(body: dict[str, Any]) -> dict[str, Any]:

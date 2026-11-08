@@ -166,7 +166,7 @@ class GenericOpenAIProvider(_S):
 
 class LLM7Provider(_S):
     """LLM7.io - key optional (best-effort). Free availability/rate limits/model rotation vary; verify before relying."""
-    id = "llm7"; label = "LLM7 (key opcional; disponibilidad free varía)"
+    id = "llm7"; label = "LLM7 (key opcional; best-effort, disponibilidad/capacidad free varía)"
     @property
     def base_url(self): return getattr(settings,'llm7_base_url',None) or 'https://api.llm7.io/v1'
     @property
