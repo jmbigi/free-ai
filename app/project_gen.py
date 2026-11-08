@@ -13,8 +13,8 @@ FILE_RE = re.compile(
     r'(?:^|\n)(?:### FILE:|## (?:Archivo|File)(?: \d+)?:|\*\*FILE:\*?\*?)\s*`?([^`\n]+?)`?\s*\*?\*?\s*\n```[^\n]*\n(.*?)```',
     re.S,
 )
-MAX_FILES = 40
-MAX_FILE_BYTES = 200_000
+MAX_FILES = 60
+MAX_FILE_BYTES = 250_000
 
 
 def _safe_rel(path: str) -> str | None:
@@ -122,7 +122,7 @@ def _quality_notes(files: list[dict[str, str]]) -> list[dict[str, Any]]:
 
 
 async def generate_one(*, prompt: str, name: str, model: str = 'auto', max_tokens: int = 1800,
-                       temperature: float = 0, max_retries: int = 2, retry_delay_s: float = 55.0,
+                       temperature: float = 0, max_retries: int = 3, retry_delay_s: float = 20.0,
                        keep_temp: bool = False) -> dict[str, Any]:
     base_parent = Path('/tmp/kilo'); base_parent.mkdir(parents=True, exist_ok=True)
     base = Path(tempfile.mkdtemp(prefix='ft-ia-project-', dir=str(base_parent)))
@@ -136,52 +136,58 @@ async def generate_one(*, prompt: str, name: str, model: str = 'auto', max_token
     evidence: dict[str, Any] = {
         'name': safe_name, 'ts': int(time.time()), 'ok': False, 'attempts_meta': [],
         'model_requested': model, 'files_extracted': 0, 'temp_dir': str(base),
-        'honest_note': 'Generated via ForthTrade IA gateway routing (FREE_ONLY). Free upstreams have quotas/rate limits/capacity; output must be reviewed and tested locally.',
     }
-    system = (
-        'You are a senior software engineer. Generate correct, production-minded, honest code/design. '
-        'Declare dependencies and limitations. Return files using this exact format for every file:\n'
-        '### FILE: relative/path.ext\n```lang\n<content>\n```\n'
-        'Rules: no absolute paths, no "..", include README/tests when useful, keep code coherent and runnable where possible. '
-        'Quality: match placeholders to types (logging `%d` only for real ints; use `%s` for UUID/str/objects), handle errors explicitly, '
-        'avoid hidden mutable defaults, make retries/idempotency deterministic in simulations, and prefer simple testable interfaces.'
+    base_system = (
+        'You are a senior software engineer. Output ONLY project files, no preamble, no thinking, no analysis. '
+        'For EVERY file use exactly:\n### FILE: relative/path.ext\n```lang\n<content>\n```\n'
+        'Rules: no absolute paths; no ".."; Python must be syntactically valid; include README and tests when useful. '
+        'Code quality: use `%s` for UUID/str/token/id/request_id/trace_id/saga_id (never `%d`/`%i` for them); '
+        '`%d`/`%i` only for real ints (attempt counters, counts). Handle errors explicitly. Deterministic retries/idempotency in simulations. Minimal coherent implementation.'
+    )
+    strict_retry = (
+        prompt.rstrip() + '\n\nIMPORTANT: Return ONLY `### FILE: ...` blocks with complete code. No explanation. '
+        'Fix logging placeholders: token/uuid/id/request_id -> `%s`; integer attempt/count -> `%d`.'
     )
     payload = {
         'model': model, 'temperature': temperature, 'max_tokens': max(256, min(4000, max_tokens)),
-        'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': prompt}],
+        'messages': [{'role': 'system', 'content': base_system}, {'role': 'user', 'content': prompt}],
         'stream': False, 'gateway': {'max_retries': int(getattr(settings, 'default_max_retries', 4) or 4)},
     }
     content = ''
     last_detail = None
-    for attempt in range(1, max(1, min(4, max_retries)) + 1):
+    for attempt in range(1, max(1, min(5, max_retries)) + 1):
         try:
+            if attempt > 1 and (not extract_files(content)):
+                payload['messages'][1]['content'] = strict_retry
+                payload['max_tokens'] = max(payload.get('max_tokens') or 1800, 1200)
             data, attempts = await execute_with_fallback(dict(payload))
             g = data.get('gateway') or {}
             msg = ((data.get('choices') or [{}])[0].get('message') or {})
             content = msg.get('content') or ''
             if not content and not msg.get('tool_calls'): content = msg.get('reasoning') or msg.get('reasoning_content') or ''
-            ok = bool(content and not data.get('detail') and not data.get('error'))
+            files_now = extract_files(content)
+            ok = bool(content and files_now and not data.get('detail') and not data.get('error'))
             meta = {'attempt': attempt, 'ok': ok, 'selected': g.get('selected') or data.get('model'),
-                    'gateway_attempts': len(attempts or g.get('attempts') or []), 'fallback_used': g.get('fallback_used')}
+                    'gateway_attempts': len(attempts or g.get('attempts') or []), 'fallback_used': g.get('fallback_used'),
+                    'files_detected': len(files_now)}
             evidence['attempts_meta'].append(meta)
             evidence['selected'] = meta['selected']
             evidence['last_gateway'] = g
             if ok:
                 evidence['ok'] = True
                 break
-            last_detail = data.get('detail') or data.get('error') or 'empty content'
+            last_detail = data.get('detail') or data.get('error') or ('no ### FILE blocks extracted' if content else 'empty content')
         except Exception as e:
             last_detail = {'message': str(e)[:500], 'attempts': getattr(e, 'attempts', None)}
             evidence['attempts_meta'].append({'attempt': attempt, 'ok': False, 'error': str(e)[:300]})
         if attempt < max_retries:
-            # adaptive backoff: longer after rate/limit signals
             delay = retry_delay_s
             s = json.dumps(last_detail, ensure_ascii=False).lower() if last_detail else ''
             if any(x in s for x in ['429', 'rate limit', 'free limit', 'every 45', 'cooldown']):
-                delay = max(delay, 60.0)
+                delay = max(delay, 45.0)
             if any(x in s for x in ['daily', 'per-day', '402', 'insufficient', 'credit']):
-                delay = max(delay, 120.0)
-            await asyncio.sleep(max(1.0, min(180.0, delay)))
+                delay = max(delay, 90.0)
+            await asyncio.sleep(max(0.5, min(180.0, delay)))
     evidence['detail'] = last_detail
     (outdir / 'GENERATED.txt').write_text(content or '', encoding='utf-8')
     files = extract_files(content)
@@ -195,12 +201,12 @@ async def generate_one(*, prompt: str, name: str, model: str = 'auto', max_token
     evidence['generated_chars'] = len(content or '')
     evidence['quality_notes'] = quality_notes
     if content and not files:
-        evidence['warning'] = 'Model returned content but no `### FILE:` blocks were extracted. Inspect content_preview/GENERATED.txt.'
+        evidence['warning'] = 'No `### FILE:` blocks extracted after retries. content_preview contains raw model output.'
     (outdir / '_meta.json').write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding='utf-8')
     summary = {k: v for k, v in evidence.items() if k not in ('last_gateway',)}
     summary['output_dir'] = str(outdir)
     summary['files'] = evidence['files']
-    summary['content_preview'] = (content or '')[:4000]
+    summary['content_preview'] = (content or '')[:6000]
     if not keep_temp:
         try:
             shutil.rmtree(base)
