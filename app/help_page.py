@@ -1,7 +1,7 @@
 from __future__ import annotations
 import html, json
 
-BASE = "https://ia.forthtrade.com"
+BASE = "https://ia.forthtrade.com"  # overridden by settings.public_base_url in callers
 KEY_ENV = "FT_AI_API_KEY"
 
 

@@ -247,14 +247,14 @@ def _normalize_payload(payload: Any) -> dict[str, Any]:
 async def help_ui(request: Request):
     base = str(request.base_url).rstrip('/')
     # prefer configured public base for displayed examples
-    public = "https://ia.forthtrade.com"
+    public = settings.public_base_url
     return render_help_html(public)
 
 @app.get("/help.json")
 @app.get("/v1/help")
 @app.get("/openai/v1/help")
 async def help_json(request: Request):
-    return help_payload("https://ia.forthtrade.com")
+    return help_payload(settings.public_base_url)
 
 
 @app.get("/ping")
@@ -284,7 +284,7 @@ async def health():
         "version": app.version,
         "uptime_s": snap.get("uptime_s", 0),
         "service": "free-ai-gateway",
-        "public_base_url": "https://ia.forthtrade.com/v1",
+        "public_base_url": settings.public_base_url + "/v1",
         "active_providers": active,
         "providers": providers,
         "models_hint": "GET /v1/models (auth) para catálogo completo; recomendado model=\"auto\".",
@@ -297,9 +297,9 @@ async def health():
             "message_max_chars": int(getattr(settings, 'context_message_max_chars', 12000)),
         },
         "auth": "Simple API key from .env (API_KEY or FT_AI_API_KEY). Authorization: Bearer <key>, api-key, x-api-key, or ?api_key=. Env cliente: FT_AI_API_KEY.",
-        "help": {"html": "https://ia.forthtrade.com/help", "json": "https://ia.forthtrade.com/help.json"},
+        "help": {"html": settings.public_base_url + "/help", "json": settings.public_base_url + "/help.json"},
         "compatibility": {
-            "base_urls": ["https://ia.forthtrade.com/v1", "/v1", "/openai/v1", "/api/v1"],
+            "base_urls": [settings.public_base_url + "/v1", "/v1", "/openai/v1", "/api/v1"],
             "chat": ["POST /v1/chat/completions"],
             "responses": ["POST /v1/responses"],
             "models": ["GET /v1/models"],

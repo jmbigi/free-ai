@@ -239,4 +239,9 @@ class SettingsProxy:
         return _read_env("LLM7_API_KEY", "")
 
 
+    @property
+    def public_base_url(self) -> str:
+        return _read_env("PUBLIC_BASE_URL", "https://ia.forthtrade.com").rstrip('/')
+
+
 settings = SettingsProxy()

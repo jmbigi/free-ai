@@ -1,4 +1,5 @@
 from __future__ import annotations
+import hmac, secrets
 import os
 from pathlib import Path
 from fastapi import Header, HTTPException, Query, Request
@@ -65,7 +66,7 @@ async def require_api_key_flexible(
     # accept raw Authorization value as token if it matches (some CLIs)
     if token is None and authorization and authorization.strip():
         token = authorization.strip()
-    if token != expected:
+    if not token or not secrets.compare_digest(token, expected):
         raise HTTPException(status_code=401, detail={"message": "Invalid or missing API key", "accepted": ["Authorization: Bearer <API_KEY|FT_AI_API_KEY>", "api-key", "x-api-key", "key/api_key query", "body api_key", "env FT_AI_API_KEY/API_KEY"]})
     return True
 
