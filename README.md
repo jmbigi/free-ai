@@ -49,6 +49,7 @@ OpenAI-compatible, aliases (`messages/prompt/input`, `max_tokens/max_completion_
 - **Último recurso:** `ncm/ncm-instruct-725m` (725M, contexto 128, CC BY-NC-SA 4.0, opt-in). **No ejecutar ambos en 8 GB de VRAM.**
 - **NCM oficial explícito:** `ncm-lm1b/ncm-lm1b-large` (725M, unconditional, 128 tokens fijos, ignora el prompt; servicio `ncm-lm1b.service`). No se enruta en `auto`; es solo para experimentación explícita.
 - **Benchmark NCM local:** `python3 local/ncm/benchmark_ncm.py --batches 1,2,4 --repeats 5 --warmup 1` mide latencia p50/p95 y throughput del servicio activo. Evidencia: `docs/progress/2026-11-08-ncm-local-benchmark.md` y `.json`.
+- **Operación NCM:** `./gateway.sh ncm-status`, `./gateway.sh ncm-test`, `./gateway.sh ncm-benchmark 5`; sincronización repo→runtime con `./deploy/sync-ncm-lm1b.sh check|apply|restart`. Ver `local/ncm/README.md`.
 - `auto` ordena: remotos gratuitos → `local-ollama` → `ncm` (si está activo) → segundos modelos remotos. Con `max_attempts=4`, Qwen entra en el 4.º intento.
 - Variables: `LOCAL_OLLAMA_ENABLED=1`, `LOCAL_OLLAMA_BASE_URL`, `LOCAL_OLLAMA_MODEL`; NCM con `NCM_LOCAL_ENABLED=0` por defecto.
 - NCM conserva la capa `thinker-lite` (clean-room, inspirada en [jmbigi/thinker](https://github.com/jmbigi/thinker), GPL-3.0-only): matemática determinista, best-of-3, validación y reparación honesta.

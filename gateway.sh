@@ -14,6 +14,8 @@ PIP="$VENV/bin/pip"
 UVICORN="$VENV/bin/uvicorn"
 SERVICE="free-ai-gateway.service"
 BASE="${GATEWAY_BASE_URL:-https://ia.forthtrade.com}"
+NCM_SERVICE="ncm-lm1b.service"
+NCM_BASE="${NCM_BASE_URL:-http://127.0.0.1:11436}"
 
 red() { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -50,6 +52,10 @@ Commands:
   health       GET /health and /readyz (public)
   audit        GET /v1/audit (auth; needs FT_AI_API_KEY/API_KEY)
   smoke        Run local smoke tests
+  ncm-status   NCM LM1B service + health + gateway provider
+  ncm-test     Verify NCM n=4 contract (4 choices, 512 tokens)
+  ncm-benchmark [repeats] [json_out]
+               Run local NCM benchmark (default 5 repeats)
   search-test  Test /v1/search (auth)
   restart      systemctl --user restart $SERVICE
   logs         Show recent service logs
@@ -97,6 +103,50 @@ cmd_status() {
   info "public"
   curl -fsS -o /dev/null -w "$BASE/health %{http_code} %{time_total}s\n" "$BASE/health" 2>&1 || true
   curl -fsS -o /dev/null -w "$BASE/readyz %{http_code} %{time_total}s\n" "$BASE/readyz" 2>&1 || true
+}
+
+cmd_ncm_status() {
+  need_venv
+  info "NCM service"
+  systemctl --user status "$NCM_SERVICE" --no-pager -l 2>&1 | sed -n '1,12p' || true
+  echo
+  info "NCM health ($NCM_BASE)"
+  curl -fsS "$NCM_BASE/health" | "$PY" -m json.tool 2>/dev/null || curl -fsS "$NCM_BASE/health"
+  echo
+  info "Gateway provider"
+  curl -fsS http://127.0.0.1:8000/health | "$PY" -c '
+import sys,json
+d=json.load(sys.stdin)
+active=d.get("active_providers") or []
+print("active_providers=", ",".join(active))
+print("ncm-lm1b active=", "ncm-lm1b" in active)
+' 2>/dev/null || true
+}
+
+cmd_ncm_test() {
+  need_venv
+  local payload body
+  payload='{"model":"ncm-lm1b-large","messages":[{"role":"user","content":"ignored"}],"n":4,"max_tokens":128,"temperature":1.0,"seed":0,"stream":false}'
+  body="$(curl -fsS "$NCM_BASE/v1/chat/completions" -H 'Content-Type: application/json' -d "$payload")"
+  printf '%s' "$body" | "$PY" -c '
+import sys,json
+d=json.load(sys.stdin)
+choices=d.get("choices") or []
+usage=d.get("usage") or {}
+indices=[c.get("index") for c in choices]
+assert len(choices)==4, f"expected 4 choices, got {len(choices)}"
+assert indices==[0,1,2,3], f"bad indices: {indices}"
+assert usage.get("completion_tokens")==512, f"bad usage: {usage}"
+print("NCM n=4 OK: choices=4 indices=0..3 completion_tokens=512")
+'
+}
+
+cmd_ncm_benchmark() {
+  need_venv
+  local reps="${1:-5}" out="${2:-}"
+  local args=(--batches 1,2,4 --repeats "$reps" --warmup 1)
+  [[ -n "$out" ]] && args+=(--output "$out")
+  "$PY" local/ncm/benchmark_ncm.py "${args[@]}"
 }
 
 cmd_health() {
@@ -209,6 +259,9 @@ case "$cmd" in
   smoke) cmd_smoke ;;
   status) cmd_status ;;
   health) cmd_health ;;
+  ncm-status) cmd_ncm_status ;;
+  ncm-test) cmd_ncm_test ;;
+  ncm-benchmark) cmd_ncm_benchmark "$@" ;;
   restart) cmd_restart ;;
   logs) cmd_logs "$@" ;;
   audit) cmd_audit ;;

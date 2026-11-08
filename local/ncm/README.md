@@ -55,6 +55,27 @@ Resultado medido el 2026-11-08 (RTX 3070 Laptop 8 GB, 5 repeticiones):
   con este benchmark HTTP.
 - JSON de evidencia: `docs/progress/2026-11-08-ncm-local-benchmark.json`.
 
+## Operación diaria
+
+```bash
+./gateway.sh ncm-status          # systemd + health + proveedor en el gateway
+./gateway.sh ncm-test            # valida n=4 -> 4 choices, 512 tokens
+./gateway.sh ncm-benchmark 5     # benchmark local, 5 repeticiones
+./deploy/sync-ncm-lm1b.sh check  # compara repo vs runtime; exit 1 si hay drift
+```
+
+El unit systemd activo ejecuta el código desde `/home/kubuntu/ncm` (copia de
+runtime), no directamente desde `local/ncm`. Para evitar drift:
+
+```bash
+./deploy/sync-ncm-lm1b.sh apply    # backup + copia; NO reinicia
+./deploy/sync-ncm-lm1b.sh restart  # apply + reinicio + health check
+```
+
+`restart` solo debe usarse cuando se autorice reiniciar el servicio. El ejemplo
+`deploy/ncm-lm1b.service.example` ejecuta desde `free-ai/local/ncm`; el unit
+instalado actualmente usa `/home/kubuntu/ncm`.
+
 ## Honest limits
 
 - Unconditional: it cannot answer or follow a chat prompt.
