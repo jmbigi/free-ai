@@ -1,0 +1,24 @@
+# jmbigi/thinker bridge (real DeepResearchThinkingLayer + VeracityLayer).
+# Requires a clone at %h/thinker with its venv and the free-ai gateway local.
+# Install: cp deploy/thinker.service.example ~/.config/systemd/user/thinker.service
+#          systemctl --user daemon-reload && systemctl --user enable --now thinker.service
+
+[Unit]
+Description=jmbigi/thinker bridge (thinking + veracity)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/free-ai/local/thinker
+Environment=THINKER_HOME=%h/thinker
+Environment=FORTHTRADE_BASE_URL=http://127.0.0.1:8000/v1
+Environment=FORTHTRADE_MODEL=auto
+Environment=THINKER_LLM_TIMEOUT=45
+EnvironmentFile=%h/free-ai/.env
+ExecStart=%h/thinker/.venv/bin/python -m uvicorn thinker_service:app --host 127.0.0.1 --port 11437
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

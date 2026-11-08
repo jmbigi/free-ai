@@ -5,6 +5,8 @@ import time
 import traceback
 import uuid
 from typing import Any
+
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -846,3 +848,51 @@ async def _project_generate(request: Request, _: bool = Depends(require_api_key_
 
 for path in ['/v1/projects/generate','/v1/project/generate','/projects/generate']:
     app.add_api_route(path, _project_generate, methods=['POST'], dependencies=[Depends(require_api_key_flexible)])
+
+
+# --- jmbigi/thinker bridge (DeepResearchThinkingLayer + VeracityLayer) ---
+async def _thinker_proxy(path: str, request: Request):
+    if not settings.thinker_enabled:
+        raise HTTPException(status_code=503, detail={
+            "message": "thinker bridge disabled; set THINKER_ENABLED=1 and start thinker.service",
+            "type": "thinker_unavailable",
+        })
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail={"message": "Invalid JSON body", "type": "invalid_request_error"})
+    try:
+        async with httpx.AsyncClient(timeout=settings.thinker_timeout) as client:
+            response = await client.post(f"{settings.thinker_base_url}{path}", json=body)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail={
+            "message": f"thinker bridge unreachable: {exc}",
+            "type": "thinker_unreachable",
+        }) from exc
+    if response.status_code >= 400:
+        try:
+            detail = response.json()
+        except Exception:
+            detail = {"message": response.text[:500], "type": "thinker_error"}
+        raise HTTPException(status_code=response.status_code, detail=detail)
+    try:
+        return JSONResponse(response.json())
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail={
+            "message": f"invalid thinker response: {exc}",
+            "type": "thinker_invalid_response",
+        }) from exc
+
+
+async def _think(request: Request, _: bool = Depends(require_api_key_flexible)):
+    return await _thinker_proxy("/v1/think", request)
+
+
+async def _verify(request: Request, _: bool = Depends(require_api_key_flexible)):
+    return await _thinker_proxy("/v1/verify", request)
+
+
+for path in ["/v1/think", "/think", "/openai/v1/think", "/api/v1/think"]:
+    app.add_api_route(path, _think, methods=["POST"], dependencies=[Depends(require_api_key_flexible)])
+for path in ["/v1/verify", "/verify", "/openai/v1/verify", "/api/v1/verify"]:
+    app.add_api_route(path, _verify, methods=["POST"], dependencies=[Depends(require_api_key_flexible)])

@@ -46,6 +46,12 @@ Auth (usa la misma `API_KEY` del `.env` del gateway):
 - Se respeta `Retry-After` (segundos o HTTP-date) y se devuelve en la respuesta del gateway cuando aplica.
 - Estado visible en `GET /v1/status` → `runtime.provider_breakers` y `runtime.cooldowns`.
 
+## Thinker (jmbigi/thinker real)
+- `POST /v1/think`: `{"prompt","provider":"gateway|mock","model":"auto","max_steps":7,"use_tot":false}`.
+- `POST /v1/verify`: `{"claim":"...","mode":"strict"}` o `{"response_text":"...","mode":"query"}`.
+- Requiere `THINKER_ENABLED=1` y `thinker.service` en `127.0.0.1:11437`.
+- `provider="mock"` se marca `simulated=true`; sin evidencia, `/v1/verify` devuelve `not_addressed` (no inventa `supported`).
+
 ## Endpoints operativos
 - `GET /health`, `GET /v1/models`, `GET /v1/providers`
 - `POST /v1/chat/completions`

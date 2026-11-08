@@ -8,6 +8,16 @@
 
 ## Qué se usó en free-ai
 
+### Integración real (2026-11-08)
+
+`local/thinker/thinker_service.py` importa las capas reales del clon
+`/home/kubuntu/thinker` (`DeepResearchThinkingLayer`, `VeracityLayer`) y las
+expone en `POST /v1/think` y `POST /v1/verify` a través del gateway. El clon
+permanece externo; el repo contiene el puente, el servicio y la documentación.
+Ver `docs/progress/2026-11-08-thinker-integration.md`.
+
+### Capa clean-room para NCM
+
 Se tomaron **principios públicos**, no código:
 
 1. Pensamiento externado en pasos explícitos.

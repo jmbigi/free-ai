@@ -26,6 +26,7 @@ curl -sS https://ia.forthtrade.com/v1/chat/completions \
 - `GET /v1/models`, `/v1/providers` — catálogo/estado (auth).
 - `POST /v1/chat/completions` — chat OpenAI-compatible (auth).
 - `POST /v1/responses` — compatibilidad básica Responses API (auth).
+- `POST /v1/think`, `/v1/verify` — puente al `jmbigi/thinker` real: capa de pensamiento de 7 pasos y veracidad (auth). Requiere `thinker.service`; ver `local/thinker/README.md`.
 - `GET /v1/metrics`, `/v1/audit`, `/v1/status`, `/v1/free`, `/v1/cache`, `/v1/telemetry`, `/v1/debug`, `/v1/connections`, `/v1/tools` — observabilidad/auditoría (auth). No exponen IPs de clientes.
 
 ## Auth (gateway)

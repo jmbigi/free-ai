@@ -215,6 +215,19 @@ class SettingsProxy:
     def ncm_lm1b_model(self) -> str:
         return _read_env("NCM_LM1B_MODEL", "ncm-lm1b-large")
 
+    # jmbigi/thinker bridge (DeepResearchThinkingLayer + VeracityLayer).
+    @property
+    def thinker_enabled(self) -> bool:
+        return _read_bool("THINKER_ENABLED", False)
+
+    @property
+    def thinker_base_url(self) -> str:
+        return _read_env("THINKER_BASE_URL", "http://127.0.0.1:11437").rstrip("/")
+
+    @property
+    def thinker_timeout(self) -> int:
+        return max(5, _read_int("THINKER_TIMEOUT", 300))
+
     # Optional upstream API keys
     @property
     def groq_api_key(self) -> str:
