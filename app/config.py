@@ -126,6 +126,10 @@ class SettingsProxy:
     def context_message_max_chars(self) -> int:
         return max(500, _read_int("CONTEXT_MESSAGE_MAX_CHARS", 12000))
 
+    @property
+    def context_summary_max_chars(self) -> int:
+        return max(500, _read_int("CONTEXT_SUMMARY_MAX_CHARS", 4000))
+
     # Optional upstream API keys
     @property
     def groq_api_key(self) -> str:

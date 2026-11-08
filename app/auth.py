@@ -67,7 +67,7 @@ async def require_api_key_flexible(
     if token is None and authorization and authorization.strip():
         token = authorization.strip()
     if not token or not secrets.compare_digest(token, expected):
-        raise HTTPException(status_code=401, detail={"message": "Invalid or missing API key", "accepted": ["Authorization: Bearer <API_KEY|FT_AI_API_KEY>", "api-key", "x-api-key", "key/api_key query", "body api_key", "env FT_AI_API_KEY/API_KEY"]})
+        raise HTTPException(status_code=401, detail={"message": "Invalid or missing API key", "method": "Authorization: Bearer <API_KEY|FT_AI_API_KEY>"})
     return True
 
 # backward compat

@@ -180,5 +180,7 @@ class LLM7Provider(_S):
         try:
             base = await super().list_models()
             if base: return base
-        except Exception: pass
+        except Exception as e:
+            import logging
+            logging.getLogger("free-ai.providers").warning("LLM7 list_models failed: %s", e)
         return [__import__('app.providers.base',fromlist=['ModelInfo']).ModelInfo(id=f"{self.id}/default", provider=self.id, owned_by=self.id, upstream_model="default", capabilities=["chat"], note="LLM7 key-optional endpoint; model availability/rate limits may vary.")]

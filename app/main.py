@@ -671,7 +671,9 @@ async def _decision(request: Request, _: bool = Depends(require_api_key_flexible
         for r in (search_result.get('results') or [])[:5]:
             evidence.append(f"- {r.get('title','')}\n  {r.get('url','')}\n  {str(r.get('snippet',''))[:500]}")
             try: kb_add(title=r.get('title') or objective[:80], url=r.get('url') or '', content=r.get('snippet') or '', tags=['search','decision'], source='web-search', meta={'objective': objective[:200]})
-            except Exception: pass
+            except Exception as e:
+                import logging
+                logging.getLogger("free-ai").warning("kb_add failed: %s", e)
     kb = kb_query(objective, limit=3)
     for r in (kb.get('results') or [])[:3]:
         evidence.append(f"- [KB] {r.get('title','')}\n  {r.get('url','')}\n  {str(r.get('content',''))[:400]}")

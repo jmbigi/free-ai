@@ -22,7 +22,9 @@ class OpenAICompatProvider(BaseProvider):
         return bool(self.api_key and self.base_url)
 
     def _headers(self) -> dict[str, str]:
-        h = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        h = {"Content-Type": "application/json"}
+        if self.api_key:
+            h["Authorization"] = f"Bearer {self.api_key}"
         h.update(self.extra_headers)
         return h
 
@@ -31,6 +33,8 @@ class OpenAICompatProvider(BaseProvider):
         for mid, upstream, caps, note in self.default_models:
             out.append(ModelInfo(id=f"{self.id}/{mid}", provider=self.id, owned_by=self.id,
                                  upstream_model=upstream, capabilities=caps, note=note))
+        if not self.base_url:
+            return out
         try:
             async with httpx.AsyncClient(timeout=20) as c:
                 r = await c.get(f"{self.base_url.rstrip('/')}/models", headers=self._headers())
@@ -43,8 +47,9 @@ class OpenAICompatProvider(BaseProvider):
                             continue
                         out.append(ModelInfo(id=f"{self.id}/{raw}", provider=self.id, owned_by=self.id,
                                              upstream_model=raw, capabilities=["chat"], note="Discovered from provider /models."))
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.getLogger("free-ai.providers").warning("list_models failed for %s: %s", self.id, e)
         return out
 
     def _prepare(self, payload: dict[str, Any], upstream: str) -> dict[str, Any]:

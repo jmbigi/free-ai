@@ -397,6 +397,7 @@ async def stream_with_fallback(payload: dict[str, Any]) -> AsyncIterator[bytes]:
     requested = (payload.get("model") or "auto").strip() or "auto"
     candidates: list[tuple[Any, ModelInfo]] = []
     tried: set[str] = set()
+    max_attempts = _clamp_attempts(payload)
     if requested != "auto":
         try:
             p, m = await resolve_model(requested)
