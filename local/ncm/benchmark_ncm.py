@@ -122,15 +122,17 @@ def validate_chat_response(data: dict[str, Any], *, batch: int) -> dict[str, Any
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
         raise RuntimeError("response has no choices")
-    first = choices[0]
-    if not isinstance(first, dict):
-        raise RuntimeError("response choice is not an object")
-    message = first.get("message")
-    if not isinstance(message, dict):
-        raise RuntimeError("response choice has no message object")
-    content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("response content is empty")
+    contents: list[str] = []
+    for choice in choices:
+        if not isinstance(choice, dict):
+            raise RuntimeError("response choice is not an object")
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise RuntimeError("response choice has no message object")
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise RuntimeError("response content is empty")
+        contents.append(content)
 
     expected_tokens = batch * TOKENS_PER_SAMPLE
     usage = data.get("usage")
@@ -142,7 +144,8 @@ def validate_chat_response(data: dict[str, Any], *, batch: int) -> dict[str, Any
 
     return {
         "choices_count": len(choices),
-        "content_chars": len(content),
+        "content_chars": len(contents[0]),
+        "content_lengths": [len(value) for value in contents],
         "expected_completion_tokens": expected_tokens,
         "reported_completion_tokens": reported_tokens,
         "usage_matches_batch": reported_tokens == expected_tokens,
@@ -205,6 +208,9 @@ def benchmark_case(
         "throughput_summary_tokens_s": summarize(throughputs),
         "response_checks": {
             "all_valid": all(check["content_chars"] > 0 for check in checks),
+            "all_choices_exposed": all(
+                check["choices_count"] == batch for check in checks
+            ),
             "all_usage_match_batch": all(
                 check["usage_matches_batch"] for check in checks
             ),

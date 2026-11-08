@@ -2,8 +2,8 @@
 
 Honest behavior: LM1B-large is an UNCONDITIONAL generator. It ignores chat
 messages and always produces a 128-token news-style sample. It is exposed for
-experimentation, not as a chat fallback. NCM cannot stream: this server emits a
-buffered SSE chunk after the full generation.
+experimentation, not as a chat fallback. NCM cannot token-stream: this server
+emits buffered SSE chunks after the full generation, one per choice.
 """
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ sys.path.insert(0, ROOT)
 
 from models.next_concept import NextConceptTransformer
 from tokenization.vqvae_tokenizer import VQVAETokenizer
+from response_builder import build_completion, build_stream_chunks
 
 MODEL_ID = "ncm-lm1b-large"
 TOKENS_PER_SAMPLE = 128
@@ -162,31 +163,15 @@ async def _run(req: ChatRequest) -> dict[str, Any]:
             raise HTTPException(status_code=502, detail=f"NCM generation failed: {exc}") from exc
 
 
-def _response(req: ChatRequest, result: dict[str, Any]) -> dict[str, Any]:
-    text = result["texts"][0]
-    return {
-        "id": f"chatcmpl-ncmlm1b-{uuid.uuid4().hex[:16]}",
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": MODEL_ID,
-        "choices": [{
-            "index": 0,
-            "message": {"role": "assistant", "content": text},
-            "finish_reason": "stop",
-        }],
-        "usage": {"prompt_tokens": 0, "completion_tokens": TOKENS_PER_SAMPLE,
-                  "total_tokens": TOKENS_PER_SAMPLE},
-        "provider": "ncm-lm1b",
-        "gateway": {
-            "local": True,
-            "experimental": True,
-            "unconditional": True,
-            "prompt_ignored": True,
-            "fixed_length": TOKENS_PER_SAMPLE,
-            "buffered_stream": True,
-            "latency_ms": result["latency_ms"],
-        },
-    }
+def _response(result: dict[str, Any]) -> dict[str, Any]:
+    return build_completion(
+        model_id=MODEL_ID,
+        texts=result["texts"],
+        latency_ms=result["latency_ms"],
+        completion_id=f"chatcmpl-ncmlm1b-{uuid.uuid4().hex[:16]}",
+        created=int(time.time()),
+        tokens_per_sample=TOKENS_PER_SAMPLE,
+    )
 
 
 @app.on_event("startup")
@@ -221,23 +206,22 @@ def models() -> dict[str, Any]:
 @app.post("/v1/chat/completions")
 async def chat(req: ChatRequest):
     result = await _run(req)
-    body = _response(req, result)
+    body = _response(result)
     if not req.stream:
         return body
 
+    chunks = build_stream_chunks(
+        model_id=MODEL_ID,
+        texts=result["texts"],
+        latency_ms=result["latency_ms"],
+        completion_id=body["id"],
+        created=body["created"],
+        tokens_per_sample=TOKENS_PER_SAMPLE,
+    )
+
     async def gen():
-        chunk = {
-            "id": body["id"], "object": "chat.completion.chunk",
-            "created": body["created"], "model": MODEL_ID,
-            "choices": [{"index": 0, "delta": {"role": "assistant", "content": result["texts"][0]},
-                         "finish_reason": None}],
-            "gateway": body["gateway"],
-        }
-        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
-        final = {"id": body["id"], "object": "chat.completion.chunk",
-                 "created": body["created"], "model": MODEL_ID,
-                 "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
-        yield f"data: {json.dumps(final, ensure_ascii=False)}\n\n".encode()
+        for chunk in chunks:
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
         yield b"data: [DONE]\n\n"
 
     return StreamingResponse(gen(), media_type="text/event-stream",

@@ -17,14 +17,14 @@ python3 local/ncm/benchmark_ncm.py \
 
 ## Resultados medidos
 
-Servicio observado: `params=724.800.640`, `vram_mb=3410,4`, `load_s=13,765`,
+Servicio observado: `params=724.800.640`, `vram_mb=3410,4`, `load_s=12,671`,
 `unconditional=true`, `prompt_ignored=true`, `fixed_length=128`.
 
 | Batch | Tokens generados | p50 latencia | p95 latencia | p50 tok/s | Media tok/s |
 |---:|---:|---:|---:|---:|---:|
-| 1 | 128 | 341,0 ms | 343,8 ms | 375,4 | 379,1 |
-| 2 | 256 | 463,5 ms | 466,6 ms | 552,3 | 551,6 |
-| 4 | 512 | 757,4 ms | 759,3 ms | 676,0 | 676,4 |
+| 1 | 128 | 330,2 ms | 334,6 ms | 387,6 | 386,9 |
+| 2 | 256 | 465,4 ms | 467,9 ms | 550,1 | 549,9 |
+| 4 | 512 | 758,9 ms | 760,1 ms | 674,6 | 675,0 |
 
 Las cinco repeticiones de cada batch están en el JSON de evidencia:
 `docs/progress/2026-11-08-ncm-local-benchmark.json`.
@@ -38,19 +38,36 @@ POST http://127.0.0.1:8000/v1/chat/completions
 model=ncm-lm1b/ncm-lm1b-large
 ```
 
-Resultado: **HTTP 200**, `model=ncm-lm1b-large`, 461 caracteres, `latency_ms=339`,
+Resultado: **HTTP 200**, `model=ncm-lm1b-large`, 461 caracteres, `latency_ms=329`,
 `gateway.local=true`, `unconditional=true`, `prompt_ignored=true`,
 `fallback_used=false`, `selected=ncm-lm1b/ncm-lm1b-large`,
-`selected_is_free_tier=true`. La petición usó la API key del gateway desde
-`.env`; la clave no se imprimió ni se commiteó.
+`selected_is_free_tier=true`, `gateway.batch=1`. La petición usó la API key del
+gateway desde `.env`; la clave no se imprimió ni se commiteó.
 
-## Hallazgo funcional
+## Corrección aplicada: `n > 1`
 
-Para `n > 1`, el servidor genera `n` muestras pero devuelve solo la primera
-`choice` y reporta `completion_tokens=128`. El benchmark cuenta `128*n` y
-registra el desajuste (`usage_matches_batch=false`). El gateway usa `n=1`, así
-que la ruta de chat normal no está afectada. Corregir la respuesta para `n>1`
-requiere modificar y reiniciar `ncm-lm1b`; no se reinició ningún servicio.
+Antes, el servidor generaba `n` muestras pero devolvía solo la primera `choice`
+y reportaba `completion_tokens=128`. Se corrigió con
+`local/ncm/response_builder.py`:
+
+- Devuelve **todas** las choices, con índices 0..n-1.
+- `usage.completion_tokens = 128*n`.
+- `gateway.batch` y `gateway.samples` reflejan el batch.
+- El streaming emite un chunk por choice y un chunk final con `stop` para cada
+  índice.
+
+Verificación real después de reiniciar `ncm-lm1b`:
+
+| Prueba | Resultado |
+|---|---|
+| `n=4` no-stream | 4 choices, índices 0..3, `completion_tokens=512` |
+| `n=2` stream | 3 chunks, índices 0/1, `completion_tokens=256` |
+| `n=1` vía gateway | HTTP 200, 461 caracteres, `gateway.batch=1` |
+| Benchmark `n=1/2/4` | `choices=1/2/4`, `usage_match=true` en todos |
+
+Se guardó backup del archivo de runtime anterior en
+`/home/kubuntu/ncm/ncm_lm1b_server.py.bak-20261108-195849`. El servicio
+`ncm-lm1b` se reinició para cargar el fix y volvió a `active` en ~12 s.
 
 ## Pruebas
 
@@ -58,13 +75,20 @@ requiere modificar y reiniciar `ncm-lm1b`; no se reinició ningún servicio.
 .venv/bin/python -m unittest tests_ncm_benchmark_unit.py -v
 ```
 
-Resultado: **11 tests OK**. Los tests cubren percentiles, resumen, parseo de
+Resultado: **12 tests OK**. Los tests cubren percentiles, resumen, parseo de
 batches y validación de respuestas, sin red.
+
+```bash
+.venv/bin/python -m unittest tests_ncm_response_unit.py -v
+```
+
+Resultado: **6 tests OK**. Cubren `n=1`, `n=4`, usage `128*n`, choices,
+streaming y validación de textos vacíos.
 
 También se verificó:
 
 - `tests_router_unit.py`: **17 tests OK, 3 skipped**.
-- `python3 -m py_compile local/ncm/benchmark_ncm.py tests_ncm_benchmark_unit.py`: OK.
+- `python3 -m py_compile local/ncm/benchmark_ncm.py local/ncm/response_builder.py tests_ncm_benchmark_unit.py tests_ncm_response_unit.py`: OK.
 - Servicio caído simulado en `127.0.0.1:9`: el benchmark falla con error claro
   y exit 1; no inventa resultados.
 - Batch inválido `9`: argparse lo rechaza con exit 2.
@@ -85,4 +109,6 @@ También se verificó:
 - `free-ai-gateway`: activo.
 - `thinker`: activo.
 - `ollama` y `ncm-instruct`: inactivos.
-- No se inició, detuvo ni reinició ningún servicio para esta prueba.
+- `ncm-lm1b` se reinició **una vez** para aplicar el fix de `n>1`; volvió a
+  `active` y el health check quedó `ok/loaded=true`. No se tocaron los demás
+  servicios.

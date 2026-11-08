@@ -86,13 +86,24 @@ class ValidateResponseTests(unittest.TestCase):
         self.assertTrue(check["prompt_ignored"])
         self.assertEqual(check["expected_completion_tokens"], 128)
 
-    def test_batch_four_reports_server_mismatch(self):
+    def test_batch_four_with_stale_usage_is_flagged(self):
         check = bench.validate_chat_response(
             self._response(4, reported=128), batch=4
         )
         self.assertFalse(check["usage_matches_batch"])
         self.assertTrue(check["single_choice_for_batch"])
         self.assertEqual(check["expected_completion_tokens"], 512)
+
+    def test_batch_four_correct_contract(self):
+        data = self._response(4, reported=512)
+        data["choices"] = [
+            {"index": index, "message": {"role": "assistant", "content": f"t{index}"}}
+            for index in range(4)
+        ]
+        check = bench.validate_chat_response(data, batch=4)
+        self.assertTrue(check["usage_matches_batch"])
+        self.assertFalse(check["single_choice_for_batch"])
+        self.assertEqual(check["choices_count"], 4)
 
     def test_empty_content_is_rejected(self):
         with self.assertRaises(RuntimeError):

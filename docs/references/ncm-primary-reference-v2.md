@@ -748,7 +748,7 @@ corregido y lo que sigue siendo una propuesta no ejecutada.
 
 - `ncm-lm1b.service`: **active/enabled**, loopback `127.0.0.1:11436`.
 - `GET /health`: `status=ok`, `params=724.800.640`, `vram_mb=3410,4`,
-  `load_s=13,765`, `unconditional=true`, `prompt_ignored=true`,
+  `load_s=12,671`, `unconditional=true`, `prompt_ignored=true`,
   `fixed_length=128`.
 - Gateway `free-ai-gateway`: **active**, con proveedor `ncm-lm1b` visible.
 - `ncm-lm1b/ncm-lm1b-large` es un generador **unconditional**: ignora el prompt
@@ -759,11 +759,14 @@ corregido y lo que sigue siendo una propuesta no ejecutada.
   resultado de H100.
 - Benchmark HTTP reproducible añadido el 2026-11-08:
   `local/ncm/benchmark_ncm.py`. Medición NCM-only, batches 1/2/4, 5 repeticiones:
-  p50 **341,0/463,5/757,4 ms**; p50 throughput **375,4/552,3/676,0 tok/s**.
+  p50 **330,2/465,4/758,9 ms**; p50 throughput **387,6/550,1/674,6 tok/s**.
   Evidencia: `docs/progress/2026-11-08-ncm-local-benchmark.md` y `.json`.
+  La respuesta `n>1` se corrigió para devolver todas las choices y
+  `completion_tokens=128*n`; verificado con 4 choices y 512 tokens.
   Sigue siendo capacity local, no el benchmark completo NCM vs AR/NCP/Cola2.
-- `ollama.service` y `ncm-instruct.service`: **inactivos**. No se iniciaron,
-  detuvieron ni modificaron servicios para esta revisión.
+- `ollama.service` y `ncm-instruct.service`: **inactivos**; no se tocaron.
+  `ncm-lm1b` se reinició una vez para aplicar el fix de respuesta `n>1`
+  (todas las choices y `completion_tokens=128*n`).
 
 ### Límites de esta referencia
 

@@ -36,8 +36,10 @@
 - **Servicio local:** `ncm-lm1b.service` activo en `127.0.0.1:11436`;
   `/health` reporta 724.800.640 parámetros, 3.410,4 MB de VRAM, carga 13,765 s,
   `unconditional=true`, `prompt_ignored=true`, `fixed_length=128`.
-- **Gateway:** activo, con proveedor `ncm-lm1b` visible. No se inició, detuvo
-  ni modificó ningún servicio para esta revisión.
+- **Gateway:** activo, con proveedor `ncm-lm1b` visible. En esta revisión no se
+  inició, detuvo ni modificó ningún servicio; el fix posterior de `n>1` sí
+  reinició `ncm-lm1b` y quedó documentado en
+  `2026-11-08-ncm-local-benchmark.md`.
 
 ## Límites
 

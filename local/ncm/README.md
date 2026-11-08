@@ -44,14 +44,13 @@ Resultado medido el 2026-11-08 (RTX 3070 Laptop 8 GB, 5 repeticiones):
 
 | Batch | p50 latencia | p95 latencia | p50 tok/s | Media tok/s |
 |---:|---:|---:|---:|---:|
-| 1 | 341,0 ms | 343,8 ms | 375,4 | 379,1 |
-| 2 | 463,5 ms | 466,6 ms | 552,3 | 551,6 |
-| 4 | 757,4 ms | 759,3 ms | 676,0 | 676,4 |
+| 1 | 330,2 ms | 334,6 ms | 387,6 | 386,9 |
+| 2 | 465,4 ms | 467,9 ms | 550,1 | 549,9 |
+| 4 | 758,9 ms | 760,1 ms | 674,6 | 675,0 |
 
 - Es una medición de **capacidad local**, no una comparación NCM vs AR.
-- El servidor genera `n` muestras, pero para `n > 1` devuelve solo la primera
-  choice y reporta 128 tokens; el benchmark cuenta `128*n` y registra el
-  desajuste. El gateway usa `n=1`, por lo que no se ve afectado.
+- `n > 1` devuelve **todas** las choices y reporta `completion_tokens = 128*n`.
+  La respuesta se construye en `response_builder.py` y está cubierta por tests.
 - `ncm_bench.py` (medición interna, n=8/bs=8) dio 522,9 tok/s; no es comparable
   con este benchmark HTTP.
 - JSON de evidencia: `docs/progress/2026-11-08-ncm-local-benchmark.json`.
