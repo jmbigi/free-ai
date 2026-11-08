@@ -2,10 +2,16 @@
 
 **Documento técnico consolidado — Noviembre 2026**
 
-> **Referencia principal del proyecto.** Documento aportado por el programador.
-> Se conserva el texto consolidado y se añade una **Nota editorial de
-> verificación** al final con el estado de las fuentes, correcciones y
-> limitaciones. No usar una cifra sin comprobar su nota (regla 14).
+> **SUPERSEDIDO (2026-11-08).** Documento histórico aportado por el
+> programador. La referencia principal vigente es
+> **[ncm-primary-reference-v2.md](ncm-primary-reference-v2.md)**. Esta v1
+> conserva el texto original, pero sus cifras de KV-cache (19,3/38,6 GB),
+> prefill (133 µs), \(B^*\approx3,5\) y la frase «NCM nunca comparó contra AR»
+> quedaron corregidas en la v2. No usar esta versión para esas cifras.
+>
+> Se conserva una **Nota editorial de verificación** al final con el estado de
+> las fuentes y las correcciones aplicadas. No usar una cifra sin comprobar su
+> nota (regla 14).
 
 ---
 
@@ -126,21 +132,25 @@ Para \(L=128\), el mínimo absoluto es **611 ms**. Cualquier benchmark que repor
 
 ### 4.2 El KV-cache mantiene a AR en régimen memory-bound
 
-La suposición frecuente de que AR "se vuelve compute-bound" a batch grande es incorrecta para contextos largos. El tráfico de KV-cache **no se amortiza entre muestras**:
+La suposición frecuente de que AR "se vuelve compute-bound" a batch grande es incorrecta para contextos largos. El tráfico de KV-cache **no se amortiza entre muestras**. Para GQA, la fórmula correcta usa las cabezas KV, no la dimensión oculta completa:
 
 \[
-M_{\text{KV}}(B, t) = B \cdot 2 N_{\text{layers}} d (S+t) \cdot \text{bpk}
+M_{\text{KV}}(B, t) = B \cdot 2 N_{\text{layers}} N_{\text{KVheads}} d_{\text{head}} (S+t) \cdot \text{bpk}
 \]
 
-Para Llama-3-8B (\(N=32\), \(d=4096\)), \(S=512\), \(t=576\), \(B=64\): \(M_{\text{KV}} \approx 19.3\) GB, comparable a los 16 GB de pesos. A \(B=128\), \(M_{\text{KV}} \approx 38.6\) GB. **AR sigue siendo memory-bound en todo el rango \(B \in [1, 128]\)** para \(S=512\).
+Para Llama-3-8B (\(N=32\), \(N_{\text{KVheads}}=8\), \(d_{\text{head}}=128\), \(d_{\text{KV}}=1024\)), \(S=512\), \(t=576\), \(B=64\): \(M_{\text{KV}} \approx 9.13\) GB, comparable a los 16 GB de pesos. A \(B=128\), \(M_{\text{KV}} \approx 18.25\) GB. **La atención sobre KV-cache sigue siendo memory-bound en ese rango**, aunque el modelo completo pueda acercarse a cómputo por las proyecciones y el MLP.
 
-### 4.3 NCM es compute-bound, pero su desventaja es de cómputo total
+> Corrección v2: la cifra anterior de 19,3/38,6 GB usaba la dimensión oculta \(d=4096\) en lugar de \(d_{\text{KV}}=1024\) y sobreestimaba el KV-cache cuatro veces. Ver [v2 §4.3](ncm-primary-reference-v2.md#43-memoria-del-kv-cache).
 
-NCM evita el cuello de botella de memoria de AR porque procesa \(\ell_k\) posiciones en paralelo en cada nivel. Pero \(\sum \ell_k \approx 2L\) a \(4L\) (dependiendo del schedule), y \(\sum \ell_k^2 > L^2/2\). Para un schedule geométrico de razón 2, \(\sum \ell_k \approx 2L\) y \(\sum \ell_k^2 \approx \frac{4}{3}L^2 > \frac{1}{2}L^2\). **NCM hace más FLOPs totales que AR**, y su ventaja desaparece cuando el hardware está saturado de cómputo.
+### 4.3 NCM no es compute-bound en todos los niveles, pero su desventaja es de cómputo total
+
+NCM procesa \(\ell_k\) posiciones en paralelo dentro de cada nivel, pero los niveles tempranos tienen pocas posiciones y pueden ser memory-bound. No debe usarse una única aproximación compute-bound para todos los batches. Dicho esto, \(\sum \ell_k \approx 2L\) a \(4L\) (dependiendo del schedule), y \(\sum \ell_k^2 > L^2/2\). Para un schedule geométrico de razón 2, \(\sum \ell_k \approx 2L\) y \(\sum \ell_k^2 \approx \frac{4}{3}L^2 > \frac{1}{2}L^2\). **NCM hace más FLOPs totales que AR**, y su ventaja desaparece cuando el hardware está saturado de cómputo.
+
+> Corrección v2: el régimen debe modelarse por nivel; los niveles \(\ell_k\) pequeños pueden ser memory-bound. Ver v2 §1.3, Error 3.
 
 ### 4.4 El punto de cruce \(B^*\): la evidencia empírica
 
-Pruebas independientes en un DGX Spark confirman la inversión: **NCM es ~4× más rápido en solicitud única** (traducción) y ~2× en resumen, pero **un AR estándar lo supera a partir de batch 64**, porque NCM hace más cómputo total por respuesta aunque necesite menos pasos. El paper original **nunca comparó contra un AR estándar**, solo contra modelos de difusión.
+Pruebas independientes en un DGX Spark confirman la inversión: **NCM es ~4× más rápido en solicitud única** (traducción) y ~2× en resumen, pero **un AR estándar lo supera a partir de batch 64**, porque NCM hace más cómputo total por respuesta aunque necesite menos pasos. El paper original **sí incluye un baseline AR en Sudoku** (1,0% en difícil), pero **no presenta una comparación sistemática de serving contra un AR estándar**; sus speedups principales son frente a modelos de difusión.
 
 ---
 
@@ -160,7 +170,7 @@ Se han propuesto varios protocolos para formalizar la frontera operacional AR vs
 
 **Error 5 — Peak TFLOPS vs. TFLOPS efectivos.** Para modelos de ~100M, el TFLOPS efectivo es 20–40% del peak. Usar peak **sobreestima \(B^*\)** en un factor de 2,5–5×.
 
-**Error 6 — Prefill despreciado.** Para \(S=512\), \(T_{\text{prefill}} \approx 133\,\mu s\), comparable a \(T_{\text{decode}}\) por muestra. Descartarlo **subestima \(B^*\)**.
+**Error 6 — Prefill despreciado.** Para un modelo de 8B y \(S=512\), el coste lineal de proyecciones es \(2PS \approx 8.192\) TFLOPs; a 989 TFLOPS, la cota inferior es **≈8,3 ms**, no 133 µs. Descartarlo **subestima \(B^*\)**. Es una cota inferior idealizada, no una latencia medida.
 
 ### 5.2 Cancelación de errores y el peligro de la falsa plausibilidad
 
@@ -181,9 +191,9 @@ El script propuesto para medir \(\mu\) y la saturación de HBM contiene errores 
 La tabla que reporta latencias y throughputs para \(B \in [1, 128]\) contiene:
 
 - **AR a \(B=1\) = 462,5 ms es físicamente imposible** (mínimo ≥611 ms).
-- **Etiquetas de régimen erróneas:** AR está marcado como "Compute-Bound" a \(B=32, 64, 128\), cuando el KV-cache lo mantiene memory-bound en todo el rango.
+- **Etiquetas de régimen erróneas:** AR está marcado como "Compute-Bound" a \(B=32, 64, 128\), pero la atención sobre KV-cache sigue siendo memory-bound; el modelo completo puede acercarse a cómputo por las proyecciones y el MLP, así que la etiqueta única no es defendible.
 - **Inconsistencia de escalado:** NCM pasa de 154,2 ms a \(B=1\) a 920,4 ms a \(B=64\), un ratio de 6× para 64× más trabajo. Para un workload compute-bound, el tiempo debería crecer linealmente con \(B\) una vez saturado.
-- **\(B^* \approx 64\) no se sigue del modelo declarado.** Con los parámetros dados (Llama-3-8B, \(S=512\), \(L=128\), H100, \(\mu=0,4\)), el cálculo correcto da **\(B^* \approx 3,5\)**: NCM gana solo para \(B \le 3\) y AR desde \(B \approx 4\).
+- **\(B^* \approx 64\) no se sigue del modelo declarado.** Tampoco se sigue **\(B^* \approx 3,5\)**: con los parámetros dados (Llama-3-8B, \(S=512\), \(L=128\), H100, \(\mu=0,4\)) no hay base suficiente para fijar una constante universal. El cruce depende de TFLOPS efectivos, KV-cache, prefill, schedule y definición de throughput; sigue siendo una cuestión experimental abierta (v2 §4.5).
 
 ---
 
@@ -233,23 +243,26 @@ El paper de NCM reconoce explícitamente:
 
 ## Nota editorial de verificación (2026-11-08)
 
-Este documento se incorpora como **referencia principal**, pero no todas sus
-cifras tienen el mismo nivel de evidencia. Estado:
+Este documento queda como **referencia histórica (v1)**; la referencia
+principal vigente es [ncm-primary-reference-v2.md](ncm-primary-reference-v2.md).
+No todas sus cifras tienen el mismo nivel de evidencia. Estado:
 
 | Bloque | Estado | Evidencia / nota |
 |---|---|---|
 | NCM 10–31× vs DLMs; 4–5× menos tokens; Sudoku 86.1%; 725M | **Verificado** | arXiv:2610.14162, abstract, §4.3–§4.6, Tabla 3, Apéndice I. |
-| NCM nunca comparó contra AR estándar en el paper | **Verificado** | El paper compara contra DLMs; el benchmark independiente cubre AR. |
+| NCM no presenta comparación sistemática de serving contra AR; en Sudoku sí incluye AR (1.0%) | **Verificado con matiz** | Tabla 3 del paper: AR 14,6/5,1/1,0%; los speedups principales son frente a DLMs. La frase «nunca comparó AR» era demasiado amplia y fue corregida en v2 §4.4. |
 | `ncm-mlx` fp64 3.2e-10 / 1.2e-13 | **Verificado** | `ncm-mlx/docs/official-checkpoints.md`: fila fp64; fp32 0.10 / 7.2e-5 es la ruta de producción. |
 | `ncm-mlx` Sudoku 99.40 / 96.30 / 86.20 | **Verificado** | 1,988 / 1,926 / 1,724 de 2,000; paper 99.5 / 96.5 / 86.1. |
+| `ncm-mlx` scratch 98.10/83.40/40.30 (seed 0) y 97.25/79.60/33.25 (seed 1) | **Verificado con matiz** | `docs/EXPERIMENTS.md` E19-funded/E20; modelo más pequeño y receta distinta, no replicación limpia del paper. |
 | `ncm-mlx-tinyworld` 5.0M/1.3M/4.8M, 89.8/98.6, 16.3/23.5, 6+1 vs 32 | **Verificado** | Model card `janmusic/NCM-TinyWorld-5M-MLX`. |
 | NCP-ArchPreview 8.9B, 5.73T, 51.3%, +5.99 GSM8K | **Verificado** | arXiv:2609.10715. |
 | Cola2 346B tokens, supera a Llama-3-8B solo en HellaSwag/StoryCloze | **Verificado con matiz** | Model card: 41.75 vs 39.21 y 80.42 vs 79.49; promedio global 60.10 vs 66.25. |
 | Benchmark DGX Spark: ~4× single, ~2× resumen, AR gana en batch 64 | **Verificado (secundario)** | MindStudio, 29 Oct 2026; no es revisión por pares. |
 | Cola2 arXiv `2610.xxxxx` | **Corregido** | arXiv:2610.31305. |
 | Scaling Intelligence `/pubs/ncm/` | **Corregido** | URL usada: `https://scalingintelligence.stanford.edu/blogs/ncm/`. |
-| \(M_{\text{KV}} \approx 19.3\) GB (Llama-3-8B, B=64, S=512, t=576) | **Revisar** | Con K+V y 2 bytes, el cálculo estándar da ~36.5 GB; el 19.3 GB parece omitir el factor 2 de K/V o usar otra convención. No citar sin reconciliar fórmula y número. |
-| \(B^* \approx 3.5\) | **Dependiente del modelo** | Depende de TFLOPS efectivos, KV-cache, prefill y schedule; no es universal. |
+| \(M_{\text{KV}} \approx 19.3\) GB / \(38.6\) GB (Llama-3-8B, B=64/128) | **Corregido en v2** | Con GQA (\(N_{\text{KVheads}}=8\), \(d_{\text{head}}=128\)): **9,13 GB / 18,25 GB**. La cifra 19,3/38,6 usaba \(d=4096\) y sobreestimaba 4×. |
+| \(B^* \approx 3.5\) | **Rechazado como constante** | Depende de TFLOPS efectivos, KV-cache, prefill, schedule y definición de cruce; el valor 3,5 no es un resultado demostrado. |
+| Prefill 8B, \(S=512\): 133 µs | **Corregido en v2** | \(2PS=8.192\) TFLOPs; a 989 TFLOPS, cota inferior **≈8,3 ms**. No es una latencia medida. |
 | “NCM es directamente compute-bound” | **Matiz** | Los niveles tempranos (\(\ell_k\) pequeño) pueden ser memory-bound; el texto mismo lo corrige en §5.1. |
 | “NCM listo para producción” | **No** | El documento concluye lo contrario; los sistemas en producción siguen en AR. |
 

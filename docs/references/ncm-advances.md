@@ -1,7 +1,8 @@
 # NCM: evidencia verificada y límites (2026-11-08)
 
-> Referencia principal consolidada: [ncm-primary-reference.md](ncm-primary-reference.md).
-> Este documento es un anexo de verificación y límites.
+> Referencia principal consolidada: [ncm-primary-reference-v2.md](ncm-primary-reference-v2.md).
+> La v1 ([ncm-primary-reference.md](ncm-primary-reference.md)) queda como
+> histórica. Este documento es un anexo de verificación y límites.
 
 Regla asociada: `AGENTS.md` → regla 14 (NCM como tercera vía, evidencia dual).
 
@@ -97,6 +98,28 @@ https://huggingface.co/ByteDance-Seed/Cola2
   “enmascaramiento continuo”; es coarse-to-fine con códigos discretos y niveles
   secuenciales. La intensidad 10–30 FLOP/byte y los porcentajes de utilización
   son estimaciones, no mediciones.
+
+## Correcciones de la referencia v2 (2026-11-08)
+
+- **KV-cache GQA:** Llama-3-8B tiene 8 cabezas KV de 128 dimensiones
+  (\(d_{\text{KV}}=1024\)), no \(d=4096\). Para \(S=512\), \(t=576\), BF16:
+  **9,13 GB** a B=64 y **18,25 GB** a B=128. Las cifras v1 de 19,3/38,6 GB
+  quedan sustituidas.
+- **Prefill:** para 8B y \(S=512\), \(2PS=8.192\) TFLOPs; a 989 TFLOPS la cota
+  inferior es **≈8,3 ms**, no 133 µs. Es aritmética, no una latencia medida.
+- **TF32:** H100 SXM tiene **494 TFLOPS densos** (989 con sparsity). BF16 denso
+  989, sparse 1.979.
+- **Sudoku 3,9%→56,6%:** pertenece a **orden aprendido** (PONDER,
+  arXiv:2610.23531); el orden greedy por incertidumbre reporta 38,7%. No
+  atribuir el 56,6% a un orden basado en incertidumbre.
+- **NCM vs AR:** el paper sí incluye un baseline AR en Sudoku (1,0% difícil),
+  pero no una comparación sistemática de serving. El punto de cruce \(B^*\)
+  sigue abierto; \(B^*\approx3,5\) no es un resultado demostrado.
+- **`ncm-mlx` scratch:** 98,10/83,40/40,30 (seed 0) y 97,25/79,60/33,25
+  (seed 1) son modelos más pequeños y recetas distintas, no una replicación
+  limpia del entrenamiento oficial.
+- **Benchmark completo:** la comparación NCM vs AR vs NCP vs Cola2 con FLOPs,
+  HBM, latencia, throughput y energía **no se ejecutó**; sigue pendiente.
 
 ## Implicaciones para este repositorio
 

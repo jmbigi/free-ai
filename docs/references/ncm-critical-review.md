@@ -159,7 +159,8 @@ NCM asigna la misma estructura jerárquica $K$ a cualquier secuencia. Esto gener
 | `ncm-mlx` existe y es un puerto independiente de NCM a MLX | **Verificado** | https://github.com/janmus1c/ncm-mlx |
 | Paridad fp64 con diferencias 3.2e-10 / 1.2e-13 | **Verificado** | `ncm-mlx/docs/official-checkpoints.md`: fila fp64 **3.2e-10** (TinyStories) y **1.2e-13** (Sudoku-easy). La ruta fp32 reporta 0.10 (1.2e-4 relativa) y 7.2e-5; ambas son consistentes. |
 | Sudoku MLX 99.40 / 96.30 / 86.20 | **Verificado** | `ncm-mlx`: 1,988/2,000 easy, 1,926/2,000 medium, 1,724/2,000 hard; coincide con el paper dentro de 0.1–0.2 pts. |
-| Sudoku scratch difíciles 40.30% / 33.25% | **Parcialmente verificado** | La model card `janmusic/ncm-mlx-sudoku` cita 33.25–40.30% “with different model size and training”; no es una replicación limpia del checkpoint oficial. |
+| Sudoku scratch difíciles 40.30% / 33.25% | **Verificado con matiz** | `ncm-mlx/docs/EXPERIMENTS.md`: seed 0 = 98.10/83.40/40.30; seed 1 = 97.25/79.60/33.25 (fácil/medio/difícil). Son modelos más pequeños y recetas distintas; no es una replicación limpia del checkpoint oficial. |
+| El paper NCM incluye AR en Sudoku pero no benchmark de serving AR | **Verificado con matiz** | Tabla 3: AR 14.6/5.1/1.0%; los speedups principales son frente a DLMs. No confundir “sin comparación de serving” con “nunca comparó AR”. |
 | NCM paper: 21×/10×/31×; 4–5× menos tokens; Sudoku 86.1/81.3/1 | **Verificado** | arXiv:2610.14162, abstract, §4.4 Tabla 3, §4.6. |
 | Sudoku depende de estrategia de decodificación | **Verificado por benchmark independiente** | MindStudio, 29 Oct 2026; un DLM con orden por confianza se acerca. |
 | NCM sin streaming real / longitud fija / task-specific | **Verificado** | Paper Apéndice I; benchmark independiente. |

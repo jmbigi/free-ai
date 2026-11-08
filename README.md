@@ -69,7 +69,8 @@ No exponer `0.0.0.0:8000` a Internet: bypassa HTTPS y la redacción de logs. Pú
 - `docs/progress/2026-11-08-saga-generation.md` — estado real de la generación del proyecto saga vía KimiCode + ForthTrade IA, diagnóstico de throttling free-tier y próximos pasos.
 
 ## Referencias principales
-- [NCM: fundamentos, ecosistema y evaluación crítica](docs/references/ncm-primary-reference.md) — **referencia principal**.
+- [NCM: análisis técnico y evaluación crítica v2.0](docs/references/ncm-primary-reference-v2.md) — **referencia principal** (KV-cache GQA, prefill, TF32, Sudoku y límites de serving corregidos).
+- [NCM v1](docs/references/ncm-primary-reference.md) — versión histórica, sustituida por la v2; no usar sus cifras de KV-cache, prefill ni B*.
 - [Índice de referencias](docs/references/README.md) — paper NCM, `ncm-mlx`, NCP/ConceptLM, Cola2, Roofline y thinker.
 
 ## Limitación real (obligatoria)

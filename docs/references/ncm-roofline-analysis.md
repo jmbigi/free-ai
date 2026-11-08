@@ -4,6 +4,10 @@
 > el texto original y se añade una sección de verificación. Las cifras de
 > Roofline deben leerse con la precisión declarada; ver correcciones al final
 > (regla 14).
+>
+> Referencia principal vigente: [ncm-primary-reference-v2.md](ncm-primary-reference-v2.md).
+> El análisis es una aproximación, no una medición; el benchmark NCM vs AR
+> sigue pendiente.
 
 ---
 

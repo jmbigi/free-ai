@@ -4,6 +4,10 @@
 > **propuesta metodológica**, no un conjunto de resultados medidos. Las
 > correcciones y advertencias de la sección final son obligatorias para no
 > presentar pseudocódigo o expectativas como evidencia (regla 14).
+>
+> Referencia principal vigente: [ncm-primary-reference-v2.md](ncm-primary-reference-v2.md).
+> El benchmark NCM vs AR/NCP/Cola2 propuesto **no se ejecutó**; no hay
+> resultados medidos en este repositorio.
 
 ---
 
