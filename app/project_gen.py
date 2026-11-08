@@ -45,30 +45,79 @@ def extract_files(text: str) -> list[dict[str, str]]:
     return out
 
 
-_LOG_FMT_RE = re.compile(r'logger\.(debug|info|warning|error|exception|critical)\s*\(([^)]{0,400})\)')
+_NON_INT_ARG_RE = re.compile(r'\b(token|uuid|idempotency[_a-z]*|request_id|trace_id|saga_id|corr(?:elation)?_id|step[_a-z]*id|message_id|key)\b', re.I)
+_FMT_SPEC_RE = re.compile(r'%(?:\([^)]+\))?[-+#0 ]*\d*(?:\.\d+)?[diouxXeEfFgGcrsa%]')
+_LOGGER_CALL_RE = re.compile(r'logger\.(debug|info|warning|error|exception|critical)\s*\(([^)]{0,400})\)')
+
+def _autofix_logging_formats(text: str) -> tuple[str, list[dict[str, Any]]]:
+    fixes = []
+    def repl(m: re.Match) -> str:
+        level, inner = m.group(1), m.group(2)
+        # split format string (first arg) from rest - simple heuristic
+        if not inner.lstrip().startswith(("'", '"', "f'", 'f"', "r'", 'r"')):
+            return m.group(0)
+        # find end of first string literal crudely
+        q = inner.lstrip()[0]
+        if inner.lstrip().startswith(('f', 'r')): q = inner.lstrip()[1]
+        i = inner.find(q)
+        if i < 0: return m.group(0)
+        j = i + 1
+        while j < len(inner):
+            if inner[j] == '\\': j += 2; continue
+            if inner[j] == q: break
+            j += 1
+        if j >= len(inner): return m.group(0)
+        fmt = inner[i:j+1]
+        rest = inner[j+1:]
+        specs = list(_FMT_SPEC_RE.finditer(fmt))
+        if not specs or '%d' not in fmt and '%i' not in fmt: return m.group(0)
+        args = [a.strip() for a in rest.split(',') if a.strip()]
+        new_fmt = fmt
+        changed = False
+        for si, sp in enumerate(specs):
+            if sp.group(0) not in ('%d','%i'): continue
+            if si >= len(args): continue
+            if _NON_INT_ARG_RE.search(args[si]):
+                # replace this occurrence index
+                occ = [x for x in _FMT_SPEC_RE.finditer(new_fmt)]
+                if si < len(occ) and occ[si].group(0) in ('%d','%i'):
+                    s,e = occ[si].span(); new_fmt = new_fmt[:s] + '%s' + new_fmt[e:]; changed = True
+        if changed:
+            fixes.append({'check':'logging_format_autofix','from':fmt[:120],'to':new_fmt[:120],'args_sample':args[:6]})
+            return f"logger.{level}({new_fmt}{rest})"
+        return m.group(0)
+    return _LOGGER_CALL_RE.sub(repl, text), fixes
 
 def _quality_notes(files: list[dict[str, str]]) -> list[dict[str, Any]]:
     notes = []
     for f in files:
-        if f['path'].endswith('.py'):
+        path = f['path']
+        content = f['content']
+        if path.endswith('.py'):
+            fixed, fixes = _autofix_logging_formats(content)
+            if fixes and fixed != content:
+                content = fixed
+                f['content'] = content
+                for fx in fixes:
+                    notes.append({'path': path, **fx, 'ok': True})
             try:
-                ast.parse(f['content'])
-                notes.append({'path': f['path'], 'check': 'python_ast', 'ok': True})
+                ast.parse(content)
+                notes.append({'path': path, 'check': 'python_ast', 'ok': True})
             except Exception as e:
-                notes.append({'path': f['path'], 'check': 'python_ast', 'ok': False, 'error': str(e)[:220]})
-            # heuristic: %d with common non-int identifiers
-            for m in _LOG_FMT_RE.finditer(f['content']):
-                call = m.group(2)
-                if '%d' in call and re.search(r'\b(token|uuid|idempot|request_id|trace_id|saga_id|corr|key|name|msg|message)\b', call, re.I) and '%s' not in call.split('%d')[0][-20:]:
-                    notes.append({'path': f['path'], 'check': 'logging_format_heuristic', 'ok': False,
-                                  'warning': 'Possible %d used for non-int value (e.g. token/UUID/str). Prefer %s or f-string.', 'sample': call[:180]})
+                notes.append({'path': path, 'check': 'python_ast', 'ok': False, 'error': str(e)[:220]})
+            for m in re.finditer(r'logger\.(?:debug|info|warning|error|exception|critical)\s*\(([^)]{0,400})\)', content):
+                call = m.group(1)
+                if ('%d' in call or '%i' in call) and _NON_INT_ARG_RE.search(call):
+                    notes.append({'path': path, 'check': 'logging_format_heuristic', 'ok': False,
+                                  'warning': 'Possible int format used for non-int arg. Review/fix.', 'sample': call[:180]})
                     break
-        elif f['path'].endswith('.json'):
+        elif path.endswith('.json'):
             try:
-                json.loads(f['content'])
-                notes.append({'path': f['path'], 'check': 'json', 'ok': True})
+                json.loads(content)
+                notes.append({'path': path, 'check': 'json', 'ok': True})
             except Exception as e:
-                notes.append({'path': f['path'], 'check': 'json', 'ok': False, 'error': str(e)[:220]})
+                notes.append({'path': path, 'check': 'json', 'ok': False, 'error': str(e)[:220]})
+        # write possibly fixed content to output dir will use f['content']
     return notes
 
 
@@ -136,6 +185,7 @@ async def generate_one(*, prompt: str, name: str, model: str = 'auto', max_token
     evidence['detail'] = last_detail
     (outdir / 'GENERATED.txt').write_text(content or '', encoding='utf-8')
     files = extract_files(content)
+    quality_notes = _quality_notes(files)
     for f in files:
         fp = outdir / f['path']
         fp.parent.mkdir(parents=True, exist_ok=True)
@@ -143,7 +193,7 @@ async def generate_one(*, prompt: str, name: str, model: str = 'auto', max_token
     evidence['files_extracted'] = len(files)
     evidence['files'] = [f['path'] for f in files]
     evidence['generated_chars'] = len(content or '')
-    evidence['quality_notes'] = _quality_notes(files)
+    evidence['quality_notes'] = quality_notes
     if content and not files:
         evidence['warning'] = 'Model returned content but no `### FILE:` blocks were extracted. Inspect content_preview/GENERATED.txt.'
     (outdir / '_meta.json').write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding='utf-8')
