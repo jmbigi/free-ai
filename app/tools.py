@@ -1,4 +1,5 @@
 from __future__ import annotations
+import inspect
 import json
 import re
 from pathlib import Path
@@ -185,14 +186,13 @@ def _grep(args: dict[str, Any]) -> dict[str, Any]:
     return {"status": "ok", "path": str(path), "count": len(hits), "files": hits[:50]}
 
 
-def _web_search(args: dict[str, Any]) -> dict[str, Any]:
+async def _web_search(args: dict[str, Any]) -> dict[str, Any]:
     from .search import web_search
-    res = web_search(str(args.get("query") or ""))
+    res = await web_search(str(args.get("query") or ""))
     return {"status": "ok", "object": res.get("object"), "provider": res.get("provider"), "count": len(res.get("results") or []), "error": res.get("error"), "results": res.get("results") or []}
 
 
 def _web_fetch(args: dict[str, Any]) -> dict[str, Any]:
-    from .search import web_search as _ws
     url = str(args.get("url") or "")
     try:
         import httpx
@@ -203,8 +203,8 @@ def _web_fetch(args: dict[str, Any]) -> dict[str, Any]:
         with httpx.Client(timeout=15, follow_redirects=True) as c:
             r = c.get(url, headers={"User-Agent": "FreeAIGateway/2.2"})
             text = r.text[:30000]
-        out = {"status": "ok", "url": url, "content": text, "final_url": r.url}
-        _cache_set("web_fetch|" + url, out, 60)
+        out = {"status": "ok", "url": url, "content": text, "final_url": str(r.url)}
+        _cache_set("web_fetch|" + url, out)
         return out
     except Exception as e:
         return {"status": "error", "error": str(e)}
@@ -277,8 +277,8 @@ async def execute_tool_calls(tool_calls: list[dict[str, Any]]) -> list[dict[str,
             })
             continue
         try:
-            res = impl(args)
-            _log.info("tool %s -> %s", name, res.get("status"))
+            res = await impl(args) if inspect.iscoroutinefunction(impl) else impl(args)
+            _log.info("tool %s -> %s", name, res.get("status") if isinstance(res, dict) else res)
             results.append({
                 "tool_call_id": tc.get("id") or "call_unknown",
                 "role": "tool",
