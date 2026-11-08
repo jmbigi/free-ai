@@ -220,6 +220,13 @@ def _retryable(exc: Exception) -> bool:
 def _cooldown_for(exc: Exception) -> float:
     msg = str(exc).lower()
     status = getattr(exc, 'status', None)
+    # honor Retry-After header for rate-limit backoff
+    ra = getattr(exc, 'retry_after', None)
+    if ra is not None:
+        try:
+            return max(1.0, float(ra))
+        except Exception:
+            pass
     if 'pollinations' in msg and ('45 seconds' in msg or 'free limit' in msg or 'every 45' in msg or 'rate limit' in msg):
         return 46.0
     if 'pollinations' in msg and status in (500, 502, 503, 504):
