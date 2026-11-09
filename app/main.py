@@ -34,6 +34,11 @@ app = FastAPI(
     ),
 )
 
+# Initialize OpenTelemetry metrics
+from .telemetry_otel import init_otel
+init_otel()
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_credentials=False,

@@ -5,6 +5,7 @@ import time
 from typing import Any, AsyncIterator
 from .observability import metrics as _metrics_obs
 from .logging import log as _log
+from .telemetry_otel import record_request
 from .providers.pollinations import PollinationsProvider
 from .providers.configured import (
     LLM7Provider,
@@ -596,6 +597,17 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
                     "estimated_cost_usd": round(estimated_cost_usd, 8),
                 }
             return data
+            # OpenTelemetry metrics
+            from .telemetry_otel import record_request as _otel_record_request
+            _otel_record_request(
+                provider=provider.id,
+                model=model.id,
+                status="ok",
+                duration_seconds=ms / 1000.0,
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0),
+                cost_usd=data["gateway"].get("cost", {}).get("estimated_cost_usd", 0.0),
+            )
         except Exception as e:
             if isinstance(e, (asyncio.TimeoutError, TimeoutError)):
                 e = ProviderError(
@@ -615,6 +627,18 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
                 _breaker_failure(provider.id, kind, e)
             elif kind == "terminal":
                 terminal = e
+            
+            # OpenTelemetry metrics for failure
+            from .telemetry_otel import record_request as _otel_record_request_fail
+            _otel_record_request_fail(
+                provider=provider.id,
+                model=model.id,
+                status="error",
+                duration_seconds=ms / 1000.0,
+                prompt_tokens=0,
+                completion_tokens=0,
+                cost_usd=0.0,
+            )
             attempts.append({
                 "provider": provider.id, "model": model.id, "ok": False, "ms": ms,
                 "error": err, "kind": kind, "retryable": kind != "terminal",

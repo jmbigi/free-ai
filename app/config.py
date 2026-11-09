@@ -431,5 +431,22 @@ class SettingsProxy:
     def model_params_json(self) -> str:
         return _read_env("MODEL_PARAMS_JSON", "{}")
 
+    # OpenTelemetry configuration
+    @property
+    def otel_enabled(self) -> bool:
+        return _read_bool("OTEL_ENABLED", False)
+
+    @property
+    def otel_endpoint(self) -> str:
+        return _read_env("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+
+    @property
+    def otel_protocol(self) -> str:
+        return _read_env("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+
+    @property
+    def otel_service_name(self) -> str:
+        return _read_env("OTEL_SERVICE_NAME", "free-ai-gateway")
+
 
 settings = SettingsProxy()
