@@ -1,0 +1,8 @@
+=== NEMOTRON RESPONSE ===
+Model: None
+Gateway model: None
+Latency: Nonems
+Finish: None
+Content:
+
+=== END NEMOTRON ===
