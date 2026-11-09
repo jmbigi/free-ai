@@ -365,5 +365,28 @@ class SettingsProxy:
     def public_base_url(self) -> str:
         return _read_env("PUBLIC_BASE_URL", "https://ia.forthtrade.com").rstrip('/')
 
+    # MCP (Model Context Protocol)
+    @property
+    def mcp_enabled(self) -> bool:
+        return _read_bool("MCP_ENABLED", False)
+
+    @property
+    def mcp_transport(self) -> str:
+        return _read_env("MCP_TRANSPORT", "stdio")
+
+    @property
+    def mcp_tools_root(self) -> str:
+        return _read_env("MCP_TOOLS_ROOT", "/tmp/mcp-tools")
+
+    # Quantization profiles
+    @property
+    def quant_profile(self) -> str:
+        return _read_env("QUANT_PROFILE", "q4_k_m")
+
+    # Model-specific parameters (JSON string)
+    @property
+    def model_params_json(self) -> str:
+        return _read_env("MODEL_PARAMS_JSON", "{}")
+
 
 settings = SettingsProxy()

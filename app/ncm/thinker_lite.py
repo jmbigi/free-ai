@@ -182,9 +182,23 @@ def apply_thinker_lite(
     llm_content: str,
     *,
     candidates: int = 1,
+    thinker: str = "auto",
 ) -> tuple[str, dict[str, Any]]:
-    """Convenience function: analyze → validate → repair → decorate."""
-    layer = ThinkerLite()
+    """Convenience function: analyze → validate → repair → decorate.
+
+    Args:
+        thinker: "auto" | "math" | "code" | "fact" | "general"
+                 Selects specialized thinker. "auto" routes by intent.
+    """
+    if thinker == "math" or (thinker == "auto" and _is_math_intent(user_content)):
+        layer = MathThinker()
+    elif thinker == "code" or (thinker == "auto" and _is_code_intent(user_content)):
+        layer = CodeThinker()
+    elif thinker == "fact" or (thinker == "auto" and _is_fact_intent(user_content)):
+        layer = FactThinker()
+    else:
+        layer = ThinkerLite()
+
     analysis = layer.analyze(user_content)
     if analysis.math_result:
         return analysis.math_result, layer.trace(analysis, valid=True, notes=["deterministic_math"],
@@ -197,3 +211,165 @@ def apply_thinker_lite(
     metadata = layer.trace(analysis, valid=valid, notes=notes,
                            repaired=repaired, candidates=candidates)
     return llm_content, metadata
+
+
+def _is_math_intent(text: str) -> bool:
+    low = text.lower()
+    return math_answer(text) is not None or re.search(r"\b(what is|calculate|cuanto es)\b", low)
+
+
+def _is_code_intent(text: str) -> bool:
+    low = text.lower()
+    return bool(re.search(r"\b(code|python|function|bug|implement|script|api|sql)\b", low))
+
+
+def _is_fact_intent(text: str) -> bool:
+    low = text.lower()
+    return bool(re.search(r"\b(what is|who is|when|where|how many|capital|define|explain)\b", low))
+
+
+class MathThinker(ThinkerLite):
+    """Specialized for deterministic arithmetic and math reasoning."""
+
+    def analyze(self, text: str) -> Analysis:
+        math = math_answer(text)
+        if math is not None:
+            return Analysis(text, "math", "high", "deterministic_math_guard", math_result=math)
+        # Fallback to base for non-arithmetic math questions
+        return super().analyze(text)
+
+    def validate(self, reply: str, analysis: Analysis) -> tuple[bool, list[str]]:
+        notes: list[str] = []
+        if analysis.intent == "math" and analysis.math_result:
+            if analysis.math_result not in reply:
+                notes.append("math answer does not match deterministic result")
+                return False, notes
+        return True, notes
+
+    def repair(self, analysis: Analysis, reply: str) -> str:
+        if analysis.intent == "math" and analysis.math_result:
+            return analysis.math_result
+        return super().repair(analysis, reply)
+
+
+class CodeThinker(ThinkerLite):
+    """Specialized for code generation: validation, style, safety."""
+
+    # Patterns that indicate common code issues
+    BARE_EXCEPT = re.compile(r"except\s*:")
+    SQL_INJECTION = re.compile(r"execute\s*\(\s*f[\"']", re.I)
+    HARDCODED_SECRETS = re.compile(r"(api_key|password|secret|token)\s*=\s*[\"'][^\"']+[\"']", re.I)
+
+    def analyze(self, text: str) -> Analysis:
+        base = super().analyze(text)
+        if base.intent == "code":
+            base.notes.append("code_generation_requested")
+            base.strategy = "code_with_validation"
+        return base
+
+    def validate(self, reply: str, analysis: Analysis) -> tuple[bool, list[str]]:
+        valid, notes = super().validate(reply, analysis)
+        if analysis.intent != "code":
+            return valid, notes
+
+        text = reply
+        issues: list[str] = []
+
+        if self.BARE_EXCEPT.search(text):
+            issues.append("bare_except_catches_all")
+        if self.SQL_INJECTION.search(text):
+            issues.append("potential_sql_injection_fstring")
+        if self.HARDCODED_SECRETS.search(text):
+            issues.append("hardcoded_secret_detected")
+        if "eval(" in text or "exec(" in text:
+            issues.append("dangerous_eval_exec")
+        if "subprocess" in text and "shell=True" in text:
+            issues.append("subprocess_shell_true_risk")
+
+        if issues:
+            notes.extend(issues)
+            return False, notes
+        return valid, notes
+
+    def repair(self, analysis: Analysis, reply: str) -> str:
+        if analysis.intent == "code":
+            return ("i cannot reliably generate production-ready code; "
+                    "please review for security, style, and correctness. "
+                    "consider using a dedicated code model or IDE.")
+        return super().repair(analysis, reply)
+
+    def decorate(self, reply: str, analysis: Analysis) -> str:
+        if analysis.intent == "code" and reply:
+            return f"# ⚠️ Code not verified\n{reply}"
+        return super().decorate(reply, analysis)
+
+
+class FactThinker(ThinkerLite):
+    """Specialized for factual QA: uncertainty, citations, hallucination guards."""
+
+    UNCERTAINTY_PHRASES = (
+        "i'm not sure", "i don't know", "uncertain", "may be", "possibly",
+        "according to", "sources indicate", "as of", "knowledge cutoff",
+    )
+    HALLUCINATION_PATTERNS = (
+        r"\b\d{4}\b",  # specific years (often hallucinated)
+        r"\b\d+\.\d+%\b",  # precise percentages
+        r"according to (?:a|the) (?:study|report|paper)",  # fake citations
+    )
+
+    def analyze(self, text: str) -> Analysis:
+        base = super().analyze(text)
+        if base.intent == "factual":
+            base.notes.append("factual_query_uncertainty_high")
+            base.strategy = "answer_with_uncertainty"
+        return base
+
+    def validate(self, reply: str, analysis: Analysis) -> tuple[bool, list[str]]:
+        valid, notes = super().validate(reply, analysis)
+        if analysis.intent != "factual":
+            return valid, notes
+
+        text = reply.lower()
+        issues: list[str] = []
+
+        # Check for uncertainty markers (good)
+        has_uncertainty = any(p in text for p in self.UNCERTAINTY_PHRASES)
+
+        # Check for hallucination patterns (bad)
+        for pattern in self.HALLUCINATION_PATTERNS:
+            if re.search(pattern, text):
+                issues.append(f"hallucination_pattern:{pattern}")
+
+        # Overconfident factual claims without uncertainty
+        if not has_uncertainty and len(text) > 50:
+            notes.append("factual_confidence_low_no_uncertainty_marker")
+            valid = False
+
+        if issues:
+            notes.extend(issues)
+            return False, notes
+        return valid, notes
+
+    def repair(self, analysis: Analysis, reply: str) -> str:
+        if analysis.intent == "factual":
+            return ("i'm not certain about that specific detail. "
+                    "please verify from a trusted primary source. "
+                    "my knowledge may be outdated or incomplete.")
+        return super().repair(analysis, reply)
+
+    def decorate(self, reply: str, analysis: Analysis) -> str:
+        if analysis.intent == "factual" and reply:
+            if not any(p in reply.lower() for p in self.UNCERTAINTY_PHRASES):
+                return f"i'm not certain, but {reply}"
+        return super().decorate(reply, analysis)
+
+
+def get_thinker(intent: str) -> ThinkerLite:
+    """Factory for intent-specific thinker."""
+    if intent == "math":
+        return MathThinker()
+    if intent == "code":
+        return CodeThinker()
+    if intent == "factual":
+        return FactThinker()
+    return ThinkerLite()
