@@ -39,10 +39,29 @@ class OpenRouterProvider(_S):
     @property
     def api_key(self): return settings.openrouter_api_key
 
+    @property
+    def _cache_ttl(self) -> int:
+        return settings.openrouter_cache_ttl
+
+    # Cache for model discovery
+    _models_cache: list | None = None
+    _models_cache_time: float = 0
+
+    def _is_cache_valid(self) -> bool:
+        import time
+        return (time.time() - self._models_cache_time) < self._cache_ttl
+
     async def list_models(self):
+        # Return cached models if valid
+        if self._models_cache is not None and self._is_cache_valid():
+            return self._models_cache
+
         base = await super().list_models()
         seen = {m.upstream_model for m in base}
         if not self.available():
+            self._models_cache = base
+            import time
+            self._models_cache_time = time.time()
             return base
         try:
             import httpx
@@ -58,12 +77,42 @@ class OpenRouterProvider(_S):
                         name = (m.get('name') or mid).lower()
                         if 'coder' in name or 'code' in name or 'tool' in str(m.get('supported_parameters') or []):
                             caps.append('tools')
+                        # Check for reasoning capability
+                        if 'reasoning' in name or 'nemotron' in name:
+                            caps.append('reasoning')
                         from .base import ModelInfo
                         base.append(ModelInfo(id=f"{self.id}/{mid}", provider=self.id, owned_by=(m.get('owned_by') or self.id), upstream_model=mid, capabilities=caps, note='OpenRouter :free discovered from /models (quota/rate limits/capacity vary).'))
         except Exception as e:
             import logging
             logging.getLogger("free-ai.providers").warning("OpenRouter :free discovery failed: %s", e)
+        
+        # Cache the result
+        import time
+        self._models_cache = base
+        self._models_cache_time = time.time()
         return base
+
+    def invalidate_cache(self) -> None:
+        """Force cache invalidation on next list_models call."""
+        self._models_cache = None
+        self._models_cache_time = 0
+
+    # Override _prepare to pass through Nemotron reasoning parameters
+    def _prepare(self, payload: dict[str, Any], upstream: str) -> dict[str, Any]:
+        body = super()._prepare(payload, upstream)
+        # Nemotron-specific parameters that OpenRouter supports
+        nemotron_params = [
+            'reasoning_effort',      # low, medium, high
+            'reasoning_tokens',      # max tokens for reasoning
+            'reasoning_budget',      # alias for reasoning_tokens
+            'reasoning',             # reasoning content
+            'reasoning_content',     # reasoning content
+            'reasoning_budget',      # reasoning budget
+        ]
+        for param in nemotron_params:
+            if param in payload:
+                body[param] = payload[param]
+        return body
 
     default_models = [
         ("openrouter/free", "openrouter/free", ["chat"], "Routes to available eligible free models; availability/rate limits vary."),
@@ -72,7 +121,9 @@ class OpenRouterProvider(_S):
         ("google/gemma-3-27b-it:free", "google/gemma-3-27b-it:free", ["chat","tools"], "Free variant when available."),
         ("google/gemma-4-31b-it:free", "google/gemma-4-31b-it:free", ["chat","tools"], "OpenRouter :free (verified in /models catalog when key configured)."),
         ("google/gemma-4-26b-a4b-it:free", "google/gemma-4-26b-a4b-it:free", ["chat","tools"], "OpenRouter :free (availability/rate limits vary)."),
-        ("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", ["chat","reasoning"], "OpenRouter :free; limits vary."),
+        ("nvidia/nemotron-3-ultra-550b-a55b:free", "nvidia/nemotron-3-ultra-550b-a55b:free", ["chat","reasoning","tools"], "Nemotron 3 Ultra free; supports reasoning_effort, reasoning_tokens."),
+        ("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", ["chat","reasoning"], "OpenRouter :free; supports reasoning_effort, reasoning_tokens."),
+        ("nvidia/nemotron-3.5-super-vl:free", "nvidia/nemotron-3.5-super-vl:free", ["chat","reasoning"], "Nemotron 3.5 Super VL free; vision + reasoning."),
         ("liquid/lfm-2.5-2.6b:free", "liquid/lfm-2.5-2.6b:free", ["chat"], "OpenRouter :free small model; limits vary."),
     ]
 

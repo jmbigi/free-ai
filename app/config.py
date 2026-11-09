@@ -271,6 +271,10 @@ class SettingsProxy:
         return _read_env("OPENROUTER_API_KEY", "")
 
     @property
+    def openrouter_cache_ttl(self) -> int:
+        return max(60, _read_int("OPENROUTER_CACHE_TTL", 3600))
+
+    @property
     def nvidia_api_key(self) -> str:
         return _read_env("NVIDIA_API_KEY", "")
 
