@@ -62,3 +62,40 @@ La primera ejecución parecía colgada porque:
 - Commits de hardening del gateway: `b015f76`, `1f61355`, `61366e7`.
 - Logs: `journalctl --user -u free-ai-gateway`, `~/.kimi-code/logs/kimi-code.log`.
 - THROTTLE: mensajes `free-tier throttle pollinations: waiting ...` en el journal.
+
+## Actualización 2026-11-08 22:20: proyecto completado
+
+La generación se completó usando **KimiCode 2.5.2** como cliente del
+**ForthTrade IA público** (`https://ia.forthtrade.com/v1`). El camino
+`forthtrade/auto` funcionó para prompts cortos, pero el agente se quedó sin
+salida por el límite de Pollinations y por `usage_missing`. Se añadieron alias
+locales de KimiCode con backup de `~/.kimi-code/config.toml`; el modelo que
+completó el código fue `openrouter/nvidia/nemotron-3-ultra-550b-a55b:free` a
+través del gateway público. No se imprimieron ni commitearon claves.
+
+Proyecto final: `examples/forthtrade-saga/`.
+
+| Archivo | Líneas | Contenido |
+|---|---:|---|
+| `saga_core.py` | 234 | Núcleo SAGA, SQLite/WAL, idempotencia, retries, compensaciones, DLQ, recovery, concurrencia |
+| `saga_cli.py` | 120 | CLI de 9 escenarios, `audit`, `dlq`, `recover` |
+| `tests/test_saga.py` | 212 | 11 tests unittest |
+| `README.md` | 107 | Arquitectura, estados, comandos y límites |
+
+Verificación ejecutada desde `examples/forthtrade-saga`:
+
+- `python3 -m unittest discover -s tests -v`: **11/11 OK**.
+- Los 9 escenarios `demo` salieron con código 0: happy, payment_fail,
+  inventory_fail, shipping_fail, compensation_fail, retry_success,
+  crash_recovery, duplicate, concurrent.
+- `crash_recovery`: primera ejecución **RUNNING**, luego
+  `recover(force=True)` → **COMPLETED**, sin duplicar el pago.
+- `duplicate`: mismo `request_id` dos veces → **3 efectos** totales, no 6.
+- `concurrent`: 8 sagas con 4 workers → todas **COMPLETED**.
+- `audit`, `dlq` y `recover` ejecutados con exit 0.
+
+La autoría del código es de ForthTrade IA/KimiCode; el operador solo orquestó
+prompts, ejecutó tests y devolvió errores concretos para la depuración. Los
+datos de runtime y los logs de orquestación quedaron fuera del repositorio.
+El proyecto es una simulación local en proceso; no sustituye microservicios
+reales, red distribuida, TLS/auth ni exactly-once de red.

@@ -69,6 +69,7 @@ No exponer `0.0.0.0:8000` a Internet: bypassa HTTPS y la redacción de logs. Pú
 ## Referencias y avances
 - `docs/references/ncm-2610.14162.md` — resumen verificable del paper NCM (arXiv:2610.14162v1), límites y relevancia. Referencia externa, no dependencia.
 - `docs/progress/2026-11-08-saga-generation.md` — estado real de la generación del proyecto saga vía KimiCode + ForthTrade IA, diagnóstico de throttling free-tier y próximos pasos.
+- `examples/forthtrade-saga/` — orquestador SAGA determinista generado por ForthTrade IA vía KimiCode; 11 tests unittest y 9 escenarios CLI verificados.
 
 ## Referencias principales
 - [NCM: análisis técnico y evaluación crítica v2.0](docs/references/ncm-primary-reference-v2.md) — **referencia principal** (KV-cache GQA, prefill, TF32, Sudoku y límites de serving corregidos).
