@@ -177,6 +177,90 @@ class ThinkerLite:
         }
 
 
+class SlidingWindowContext:
+    """Sliding window context management for models with fixed context limits.
+    
+    For NCM (128 tokens) and other small-context models, this manages
+    conversation history by keeping the most recent turns and summarizing older ones.
+    """
+    
+    def __init__(
+        self,
+        max_tokens: int = 128,
+        keep_last_messages: int = 6,
+        summary_model: str = "auto",
+        summary_prompt: str = "Summarize the following conversation briefly, preserving key facts and decisions:"
+    ):
+        self.max_tokens = max_tokens
+        self.keep_last_messages = keep_last_messages
+        self.summary_model = summary_model
+        self.summary_prompt = summary_prompt
+    
+    def estimate_tokens(self, text: str) -> int:
+        """Rough token estimation (4 chars ≈ 1 token)."""
+        return max(1, len(text) // 4)
+    
+    def count_messages_tokens(self, messages: list[dict]) -> int:
+        total = 0
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                total += self.estimate_tokens(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("text"):
+                        total += self.estimate_tokens(part["text"])
+        return total
+    
+    def compress(self, messages: list[dict]) -> list[dict]:
+        """Compress message history to fit within max_tokens."""
+        if not messages:
+            return messages
+        
+        total_tokens = self.count_messages_tokens(messages)
+        if total_tokens <= self.max_tokens:
+            return messages
+        
+        # Keep system message if present
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        other_msgs = [m for m in messages if m.get("role") != "system"]
+        
+        # Keep the last N messages
+        kept = other_msgs[-self.keep_last_messages:]
+        dropped = other_msgs[:-self.keep_last_messages] if len(other_msgs) > self.keep_last_messages else []
+        
+        if not dropped:
+            return system_msgs + kept
+        
+        # Summarize dropped messages
+        summary_text = self._summarize(dropped)
+        if summary_text:
+            summary_msg = {
+                "role": "system",
+                "content": f"Previous conversation summary: {summary_text}"
+            }
+            return system_msgs + [summary_msg] + kept
+        else:
+            return system_msgs + kept
+    
+    def _summarize(self, messages: list[dict]) -> str:
+        """Generate a summary of old messages (placeholder - would call LLM)."""
+        # In production, this would call a small summarization model
+        # For now, return a simple factual summary
+        facts = []
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if isinstance(content, str) and len(content) > 20:
+                # Extract first sentence as fact
+                first_sent = content.split(".")[0]
+                if len(first_sent) > 10:
+                    facts.append(f"{role}: {first_sent}")
+        if facts:
+            return "; ".join(facts[:5]) + "."
+        return "Previous discussion covered multiple topics."
+
+
 def apply_thinker_lite(
     user_content: str,
     llm_content: str,

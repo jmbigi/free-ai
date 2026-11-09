@@ -136,6 +136,19 @@ class SettingsProxy:
     def context_summary_max_chars(self) -> int:
         return max(500, _read_int("CONTEXT_SUMMARY_MAX_CHARS", 4000))
 
+    # Sliding window context (for small-context models like NCM)
+    @property
+    def sliding_window_enabled(self) -> bool:
+        return _read_bool("SLIDING_WINDOW_ENABLED", True)
+
+    @property
+    def sliding_window_max_tokens(self) -> int:
+        return max(64, _read_int("SLIDING_WINDOW_MAX_TOKENS", 128))
+
+    @property
+    def sliding_window_keep_last(self) -> int:
+        return max(2, _read_int("SLIDING_WINDOW_KEEP_LAST", 6))
+
     # Free-tier spacing (Pollinations anonymous enforces ~1 reply/45s/IP).
     @property
     def pollinations_min_interval(self) -> int:
