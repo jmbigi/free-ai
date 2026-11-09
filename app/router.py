@@ -11,7 +11,7 @@ from .providers.configured import (
     GroqProvider, OpenRouterProvider, NvidiaProvider, MistralProvider,
     SambaNovaProvider, CerebrasProvider, HuggingFaceProvider, TogetherProvider, CohereProvider,
     DeepSeekProvider, MoonshotProvider, OpenCodeProvider, LLM7Provider, GenericOpenAIProvider,
-    NCMProvider, OllamaLocalProvider, LlamaCppLocalProvider, NCMLm1bProvider,
+    NCMProvider, NCMInstructProvider, OllamaLocalProvider, LlamaCppLocalProvider, NCMLm1bProvider,
 )
 from .providers.gemini import GeminiProvider
 from .providers.cloudflare import CloudflareProvider
@@ -45,7 +45,7 @@ def _instances():
             OpenRouterProvider(), GroqProvider(), NvidiaProvider(), GeminiProvider(), CloudflareProvider(),
             MistralProvider(), SambaNovaProvider(), CerebrasProvider(), HuggingFaceProvider(),
             TogetherProvider(), CohereProvider(), DeepSeekProvider(), MoonshotProvider(), OpenCodeProvider(), LLM7Provider(), GenericOpenAIProvider(),
-            OllamaLocalProvider(), LlamaCppLocalProvider(), NCMProvider(), NCMLm1bProvider(),
+            OllamaLocalProvider(), LlamaCppLocalProvider(), NCMInstructProvider(), NCMProvider(), NCMLm1bProvider(),
         ]
     return _INSTANCES
 
@@ -77,6 +77,7 @@ AUTO_CANDIDATES = [
     ("llm7", "default", "LLM7 key-optional (best-effort)"),
     ("local-ollama", settings.local_ollama_model, "Qwen3.5-9B local (Ollama)"),
     ("local-llamacpp", settings.local_llamacpp_model, "Qwen3-Coder local (llama-cpp-python)"),
+    ("ncm-instruct", settings.ncm_local_model, "NCM-Instruct 725M local (thinker-lite)"),
     ("ncm", settings.ncm_local_model, "NCM local experimental (thinker-lite)"),
 ]
 
@@ -260,7 +261,7 @@ def _is_free_model(model: ModelInfo | dict[str, Any]) -> bool:
     provider = str(d.get('provider') or '').lower()
     if provider == 'pollinations':
         return True
-    if provider in ('ncm', 'local-ollama', 'local-llamacpp', 'ncm-lm1b'):
+    if provider in ('ncm', 'ncm-instruct', 'local-ollama', 'local-llamacpp', 'ncm-lm1b'):
         # Self-hosted local models: no upstream API cost.
         return True
     if provider == 'llm7':
@@ -479,14 +480,14 @@ def _build_auto_plan(*, exclude: set[str], max_items: int,
         health = (st['ok'] * 2.0) - fail_penalty - (ema / 3000.0) + fast_bonus
         # Local models are last-resort fallbacks: never let their latency or
         # success stats promote them above remote free-tier providers.
-        local_last = 1 if pid in ("ncm", "local-ollama", "local-llamacpp") else 0
+        local_last = 1 if pid in ("ncm", "ncm-instruct", "local-ollama", "local-llamacpp") else 0
         score = (local_last, 1 if left > 3 else 0, left, -health, idx)
         scored.append((score, p, m))
     scored.sort(key=lambda x: x[0])
     # Priority: one model per remote provider, then local NCM, then second
     # models of remote providers. This keeps NCM reachable within the default
     # attempt budget while still treating it as a last-resort route.
-    local_ids = ("local-ollama", "local-llamacpp", "ncm")
+    local_ids = ("local-ollama", "local-llamacpp", "ncm-instruct", "ncm")
     remote = [(score, p, m) for score, p, m in scored if p.id not in local_ids]
     local = [(score, p, m) for score, p, m in scored if p.id in local_ids]
     out: list[tuple[Any, ModelInfo]] = []

@@ -9,8 +9,10 @@ from .openai_compat import OpenAICompatProvider
 from .base import ModelInfo, ProviderError, parse_retry_after
 from .ollama_tools import build_completion, stream_delta, to_ollama_messages
 from .llamacpp_tools import extract_content_tool_calls, openai_tool_calls, to_llamacpp_messages
+from .openai_compat import OpenAICompatProvider
 from ..config import settings
 from ..normalize import normalize_chat_response
+from ..ncm.thinker_lite import apply_thinker_lite, ThinkerLite
 
 class _S(OpenAICompatProvider):
     @property
@@ -195,6 +197,84 @@ class NCMLm1bProvider(_S):
             upstream_model=m, capabilities=["chat"],
             note="Official NCM LM1B-large; unconditional, fixed 128 tokens; ignores prompts.",
         )]
+
+
+class NCMInstructProvider(OpenAICompatProvider):
+    """NCM-Instruct-725M: conditional, 128-token context, thinker-lite integrated.
+
+    This provider connects to the NCM-Instruct server (port 11435) and exposes
+    the thinker-lite metadata (intent, validation, repair) in every response.
+    It is an experimental local fallback; CC BY-NC-SA 4.0.
+    """
+    id = "ncm-instruct"; label = "NCM-Instruct 725M local (experimental, thinker-lite)"
+    @property
+    def base_url(self): return settings.ncm_local_base_url
+    @property
+    def api_key(self): return "local" if settings.ncm_local_enabled else ""
+    def available(self): return bool(settings.ncm_local_enabled and self.base_url)
+    @property
+    def default_models(self):
+        m = settings.ncm_local_model
+        return [(m, m, ["chat"], "Local NCM-Instruct-725M experimental; 128-token context; CC BY-NC-SA 4.0; thinker-lite integrated.")]
+
+    async def list_models(self):
+        m = settings.ncm_local_model
+        return [ModelInfo(
+            id=f"{self.id}/{m}", provider=self.id, owned_by=self.id,
+            upstream_model=m, capabilities=["chat"],
+            note="Local NCM-Instruct-725M; thinker-lite (math guard, validation, repair) on every turn.",
+        )]
+
+    async def chat(self, payload: dict, model: ModelInfo) -> dict:
+        body = self._prepare(payload, model.upstream_model or model.id)
+        body["stream"] = False
+        timeout = httpx.Timeout(float(getattr(settings, 'request_timeout', 45) or 45), connect=8.0)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                r = await c.post(
+                    f"{self.base_url.rstrip('/')}/chat/completions",
+                    json=body, headers=self._headers(),
+                )
+        except httpx.HTTPError as exc:
+            raise ProviderError(
+                f"{self.label} connection error: {exc}",
+                status=502, provider=self.id,
+            ) from exc
+        if r.status_code >= 400:
+            raise ProviderError(
+                f"{self.label} error {r.status_code}: {r.text[:350]}",
+                status=r.status_code, provider=self.id,
+                retry_after=parse_retry_after(r.headers.get("retry-after")),
+            )
+        data = r.json()
+        # NCM-Instruct server already includes thinker metadata in gateway field.
+        if isinstance(data, dict):
+            data["provider"] = self.id
+            data["requested_model"] = model.id
+        return normalize_chat_response(data)
+
+    async def stream_chat(self, payload: dict, model: ModelInfo):
+        body = self._prepare(payload, model.upstream_model or model.id)
+        body["stream"] = True
+        timeout = httpx.Timeout(connect=10.0, read=float(getattr(settings, 'request_timeout', 120) or 120), write=30.0, pool=10.0)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                async with c.stream("POST", f"{self.base_url.rstrip('/')}/chat/completions", json=body, headers=self._headers()) as r:
+                    if r.status_code >= 400:
+                        err = (await r.aread()).decode(errors="ignore")
+                        raise ProviderError(
+                            f"{self.label} error {r.status_code}: {err[:350]}",
+                            status=r.status_code, provider=self.id,
+                            retry_after=parse_retry_after(r.headers.get("retry-after")),
+                        )
+                    async for chunk in r.aiter_bytes():
+                        if chunk:
+                            yield chunk
+        except httpx.HTTPError as exc:
+            raise ProviderError(
+                f"{self.label} stream error: {exc}",
+                status=502, provider=self.id,
+            ) from exc
 
 
 class OllamaLocalProvider(_S):

@@ -1,0 +1,199 @@
+"""Thinker-lite: structured reasoning layer for the gateway.
+
+Clean-room implementation inspired by public principles of jmbigi/thinker (GPL-3.0-only):
+structured steps, validation before advancing, anti-repetition, explicit uncertainty.
+No source code from that repository is copied here.
+
+This module is **model-agnostic**: it wraps any LLM call made through the gateway,
+adding deterministic arithmetic, intent analysis, validation, repair and honest
+confidence metadata. It runs as a post-processor on the provider response.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from typing import Any
+
+
+FILLER = re.compile(r"(\s*[.,]){4,}")
+DUP_WORD = re.compile(r"^[a-z']+$")
+MATH_WORDS = (
+    ("multiplied by", "*"), ("divided by", "/"), ("times", "*"),
+    ("plus", "+"), ("minus", "-"), ("over", "/"), ("x", "*"),
+    ("×", "*"), ("÷", "/"),
+    ("mas", "+"), ("más", "+"),
+)
+MATH_PREFIX = re.compile(
+    r"^(what is|what's|whats|how much is|calculate|cuanto es|cuánto es|result of)\s*"
+)
+NAME_RE = re.compile(r"\bmy name is\s+([a-z0-9_-]+)", re.I)
+
+
+def math_answer(text: str) -> str | None:
+    """Deterministic arithmetic for simple expressions; None if not arithmetic."""
+    t = text.lower().strip()
+    for word, symbol in MATH_WORDS:
+        t = t.replace(word, symbol)
+    t = MATH_PREFIX.sub("", t).strip(" ?.")
+    t = re.sub(r"\s+", " ", t)
+    expr = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*([+\-*/])\s*(-?\d+(?:\.\d+)?)\s*", t)
+    if not expr:
+        return None
+    a_s, op, b_s = expr.groups()
+    a, b = float(a_s), float(b_s)
+    if op == "+":
+        result = a + b
+    elif op == "-":
+        result = a - b
+    elif op == "*":
+        result = a * b
+    else:
+        if b == 0:
+            return "division by zero is undefined"
+        result = a / b
+    fmt = lambda x: str(int(x)) if float(x).is_integer() else f"{x:g}"
+    return f"{fmt(a)} {op} {fmt(b)} = {fmt(result)}"
+
+
+@dataclass
+class Analysis:
+    text: str
+    intent: str
+    confidence: str
+    strategy: str
+    notes: list[str] = field(default_factory=list)
+    math_result: str | None = None
+    expected_name: str | None = None
+    trace: list[dict[str, Any]] = field(default_factory=list)
+
+
+class ThinkerLite:
+    """Structured pre-analysis, validation and repair for one chat turn.
+
+    Usage:
+        layer = ThinkerLite()
+        analysis = layer.analyze(user_message)
+        if analysis.math_result:
+            return analysis.math_result  # deterministic, bypass LLM
+        # ... call LLM ...
+        valid, notes = layer.validate(llm_reply, analysis)
+        if not valid:
+            llm_reply = layer.repair(analysis, llm_reply)
+        llm_reply = layer.decorate(llm_reply, analysis)
+        metadata = layer.trace(analysis, valid=valid, notes=notes,
+                               repaired=not valid, candidates=1)
+        return llm_reply, metadata
+    """
+
+    def analyze(self, text: str) -> Analysis:
+        raw = (text or "").strip()
+        low = raw.lower()
+        steps: list[dict[str, Any]] = [{"step": "normalize", "value": "lowercase/strip"}]
+        math = math_answer(raw)
+        if math is not None:
+            analysis = Analysis(raw, "math", "high", "deterministic_math_guard", math_result=math)
+        elif re.search(r"\b(hello|hi|hey|how are you|who are you|your name)\b", low):
+            analysis = Analysis(raw, "identity", "high", "direct_llm")
+        elif NAME_RE.search(raw):
+            analysis = Analysis(raw, "recall", "high", "direct_llm",
+                                expected_name=NAME_RE.search(raw).group(1).lower())
+        elif re.search(r"\b(code|python|function|bug|implement|program|script|sql|api)\b", low):
+            analysis = Analysis(raw, "code", "low", "llm_with_warning",
+                                notes=["Model may hallucinate; verify output."])
+        elif re.search(r"\b(what is|who is|when|where|how many|capital|define|explain)\b", low):
+            analysis = Analysis(raw, "factual", "low", "llm_with_uncertainty",
+                                notes=["Factual confidence low; cite sources if possible."])
+        else:
+            analysis = Analysis(raw, "chat", "medium", "direct_llm")
+        steps.append({"step": "intent", "value": analysis.intent})
+        steps.append({"step": "plan", "value": analysis.strategy})
+        analysis.trace = steps
+        return analysis
+
+    def validate(self, reply: str, analysis: Analysis) -> tuple[bool, list[str]]:
+        notes: list[str] = []
+        text = (reply or "").strip()
+        if not text:
+            return False, ["empty reply"]
+        if FILLER.search(text):
+            notes.append("filler collapse detected")
+            return False, notes
+        words = text.split()
+        dups = sum(1 for a, b in zip(words, words[1:]) if a == b and DUP_WORD.fullmatch(a))
+        if dups:
+            notes.append(f"duplicated neighbouring words: {dups}")
+        if analysis.intent == "math":
+            if analysis.math_result and analysis.math_result not in text:
+                notes.append("math answer does not match deterministic result")
+                return False, notes
+        if analysis.intent == "recall" and analysis.expected_name:
+            if analysis.expected_name not in text.lower():
+                notes.append("recall answer does not contain the expected name")
+                return False, notes
+        if analysis.intent == "code":
+            notes.append("code_warning: output not executed or verified")
+            return False, notes
+        if analysis.intent == "factual":
+            notes.append("factual_confidence_low")
+            lexical = re.findall(r"[a-z']+", text.lower())
+            unique_ratio = len(set(lexical)) / max(1, len(lexical))
+            most_common = max((lexical.count(w) for w in set(lexical)), default=0)
+            if unique_ratio < 0.6 or most_common > 2:
+                notes.append("factual_repetition_or_low_diversity")
+                return False, notes
+        return True, notes
+
+    def repair(self, analysis: Analysis, reply: str) -> str:
+        if analysis.intent == "math" and analysis.math_result:
+            return analysis.math_result
+        if analysis.intent == "code":
+            return "i cannot reliably generate code; please verify any code snippet."
+        if analysis.intent == "factual":
+            return "i'm not certain about that; please verify from a trusted source."
+        if analysis.intent == "recall" and analysis.expected_name:
+            return f"your name is {analysis.expected_name}."
+        return "i'm not sure how to answer that."
+
+    def decorate(self, reply: str, analysis: Analysis) -> str:
+        text = (reply or "").strip()
+        if analysis.intent == "factual" and text and not text.startswith("i'm not"):
+            return f"i'm not certain, but {text}"
+        return text
+
+    def trace(self, analysis: Analysis, *, valid: bool, notes: list[str],
+              repaired: bool, candidates: int) -> dict[str, Any]:
+        return {
+            "steps": analysis.trace + [
+                {"step": "generate", "value": f"llm_best_of_{candidates}"},
+                {"step": "validate", "value": "pass" if valid else "fail"},
+                {"step": "repair", "value": "applied" if repaired else "not_needed"},
+            ],
+            "intent": analysis.intent,
+            "confidence": analysis.confidence,
+            "strategy": analysis.strategy,
+            "valid": valid,
+            "notes": notes,
+            "source": "gateway thinker-lite; inspired by jmbigi/thinker (GPL-3.0-only)",
+        }
+
+
+def apply_thinker_lite(
+    user_content: str,
+    llm_content: str,
+    *,
+    candidates: int = 1,
+) -> tuple[str, dict[str, Any]]:
+    """Convenience function: analyze → validate → repair → decorate."""
+    layer = ThinkerLite()
+    analysis = layer.analyze(user_content)
+    if analysis.math_result:
+        return analysis.math_result, layer.trace(analysis, valid=True, notes=["deterministic_math"],
+                                                 repaired=False, candidates=0)
+    valid, notes = layer.validate(llm_content, analysis)
+    repaired = not valid
+    if repaired:
+        llm_content = layer.repair(analysis, llm_content)
+    llm_content = layer.decorate(llm_content, analysis)
+    metadata = layer.trace(analysis, valid=valid, notes=notes,
+                           repaired=repaired, candidates=candidates)
+    return llm_content, metadata

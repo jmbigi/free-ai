@@ -834,7 +834,7 @@ async def _project_generate(request: Request, _: bool = Depends(require_api_key_
         raise HTTPException(status_code=400, detail=_openai_error('prompt/objective required', type_='invalid_request_error', code=400, param='prompt', request_id=getattr(request.state,'request_id','')))
     name = str(body.get('name') or 'generated-project')[:120]
     model = str(body.get('model') or 'auto')
-    if getattr(settings, 'free_only', True) and model != 'auto' and not any(x in model.lower() for x in [':free','/free','pollinations/','local-ollama/','local-llamacpp/','ncm','ncm-lm1b/']):
+    if getattr(settings, 'free_only', True) and model != 'auto' and not any(x in model.lower() for x in [':free','/free','pollinations/','local-ollama/','local-llamacpp/','ncm-instruct','ncm','ncm-lm1b/']):
         raise HTTPException(status_code=403, detail=_openai_error(f'FREE_ONLY blocks non-free model selection: {model}', type_='forbidden', code=403, request_id=getattr(request.state,'request_id','')))
     res = await _project_generate_one(
         prompt=prompt, name=name, model=model,
