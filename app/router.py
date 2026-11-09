@@ -730,6 +730,33 @@ async def stream_with_fallback(payload: dict[str, Any]) -> AsyncIterator[bytes]:
         if forced:
             plan = forced + [(p,m) for p,m in plan if not m.id.startswith('pollinations/')]
     candidates.extend(plan)
+
+    # When cloud providers are rate-limited or breaker-open, promote local models
+    # (Ollama, llama-cpp, NCM) as streaming fallback candidates so KimiCode/OpenCode
+    # never gets stuck with "all providers exhausted".
+    if requested == 'auto':
+        local_candidates = [
+            ('local-ollama', settings.local_ollama_model, 'Qwen3-Coder local (Ollama)'),
+            ('local-llamacpp', settings.local_llamacpp_model, 'Qwen3-Coder local (llama-cpp)'),
+            ('ncm-instruct', settings.ncm_local_model, 'NCM-Instruct local (thinker-lite)'),
+            ('ncm', settings.ncm_local_model, 'NCM local experimental'),
+        ]
+        for pid, upstream, label in local_candidates:
+            if not settings.local_ollama_enabled and pid == 'local-ollama':
+                continue
+            if not settings.local_llamacpp_enabled and pid == 'local-llamacpp':
+                continue
+            if not settings.ncm_local_enabled and pid in ('ncm-instruct', 'ncm'):
+                continue
+            mid = f'{pid}/{upstream}'
+            if mid in tried or mid in {m.id for _, m in candidates}:
+                continue
+            p = get_provider(pid)
+            if not p or not p.available():
+                continue
+            mm = ModelInfo(id=mid, provider=pid, owned_by=pid, upstream_model=upstream,
+                          capabilities=['chat', 'tools'], note=label, free=True)
+            candidates.append((p, mm))
     errors: list[str] = []
     calls = 0
     for p, m in candidates[:10]:
