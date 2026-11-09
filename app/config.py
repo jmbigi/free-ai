@@ -274,6 +274,32 @@ class SettingsProxy:
     def openrouter_cache_ttl(self) -> int:
         return max(60, _read_int("OPENROUTER_CACHE_TTL", 3600))
 
+    # Cost tracking (USD per million tokens)
+    @property
+    def cost_tracking_enabled(self) -> bool:
+        return _read_bool("COST_TRACKING_ENABLED", True)
+
+    @property
+    def cost_per_million_tokens(self) -> dict[str, float]:
+        """Default cost per million tokens per provider (input, output). Override via COST_PER_MILLION_JSON."""
+        defaults = {
+            "openrouter": 0.0,
+            "pollinations": 0.0,
+            "nvidia": 0.0,
+            "groq": 0.0,
+            "huggingface": 0.0,
+            "local-ollama": 0.0,
+            "local-llamacpp": 0.0,
+            "ncm": 0.0,
+            "ncm-instruct": 0.0,
+            "ncm-lm1b": 0.0,
+        }
+        import json
+        try:
+            return {**defaults, **json.loads(_read_env("COST_PER_MILLION_JSON", "{}"))}
+        except Exception:
+            return defaults
+
     @property
     def nvidia_api_key(self) -> str:
         return _read_env("NVIDIA_API_KEY", "")

@@ -578,6 +578,23 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
             data["requested_model"] = requested
             data["gateway"]["free_control"] = _free_control_info()
             data["gateway"]["selected_is_free_tier"] = _is_free_model(model)
+            
+            # Cost tracking
+            if getattr(settings, 'cost_tracking_enabled', True):
+                usage = data.get("usage") or {}
+                prompt_tokens = usage.get("prompt_tokens", 0)
+                completion_tokens = usage.get("completion_tokens", 0)
+                total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
+                cost_per_m = getattr(settings, 'cost_per_million_tokens', {})
+                provider_cost = cost_per_m.get(provider.id, 0.0)
+                estimated_cost_usd = (total_tokens / 1_000_000) * provider_cost
+                data["gateway"]["cost"] = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                    "provider_cost_per_million_usd": provider_cost,
+                    "estimated_cost_usd": round(estimated_cost_usd, 8),
+                }
             return data
         except Exception as e:
             if isinstance(e, (asyncio.TimeoutError, TimeoutError)):

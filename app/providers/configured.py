@@ -75,10 +75,13 @@ class OpenRouterProvider(_S):
                         seen.add(mid)
                         caps = ['chat']
                         name = (m.get('name') or mid).lower()
-                        if 'coder' in name or 'code' in name or 'tool' in str(m.get('supported_parameters') or []):
+                        supported = m.get('supported_parameters') or []
+                        if 'coder' in name or 'code' in name or 'tool' in str(supported):
                             caps.append('tools')
-                        # Check for reasoning capability
-                        if 'reasoning' in name or 'nemotron' in name:
+                        # Check for reasoning capability - check supported_parameters from OpenRouter
+                        if 'reasoning' in supported or 'reasoning_effort' in supported or 'reasoning_tokens' in supported:
+                            caps.append('reasoning')
+                        elif 'reasoning' in name or 'nemotron' in name:
                             caps.append('reasoning')
                         from .base import ModelInfo
                         base.append(ModelInfo(id=f"{self.id}/{mid}", provider=self.id, owned_by=(m.get('owned_by') or self.id), upstream_model=mid, capabilities=caps, note='OpenRouter :free discovered from /models (quota/rate limits/capacity vary).'))
