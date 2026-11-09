@@ -1,0 +1,27 @@
+[Unit]
+Description=Free AI Gateway optional llama-cpp-python local backend
+After=network-online.target ollama.service
+Wants=network-online.target
+# This unit is optional. It is not enabled or started automatically by the
+# gateway. Start/stop it only when the operator explicitly asks.
+
+[Service]
+Type=simple
+WorkingDirectory=/home/kubuntu/free-ai
+EnvironmentFile=-/home/kubuntu/free-ai/.env
+Environment=LLAMACPP_VENV=/home/kubuntu/llamacpp-venv
+Environment=LLAMACPP_HOST=127.0.0.1
+Environment=LLAMACPP_PORT=11438
+ExecStart=/home/kubuntu/free-ai/deploy/llamacpp-server.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/kubuntu/.ollama /home/kubuntu/free-ai
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

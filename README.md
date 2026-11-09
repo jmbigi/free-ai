@@ -44,16 +44,18 @@ OpenAI-compatible, aliases (`messages/prompt/input`, `max_tokens/max_completion_
 - Basado en prácticas verificables: [AWS exponential backoff + jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/), [Google SRE: handling overload](https://sre.google/sre-book/handling-overload/), [Azure circuit breaker](https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker) y [RFC 9110 §10.2.3 Retry-After](https://www.rfc-editor.org/rfc/rfc9110#section-10.2.3).
 - Estado real: `GET /v1/status` → `runtime.provider_breakers`, `runtime.cooldowns`.
 
-## Fallback local (Qwen3.5-9B + NCM experimental)
-- **Principal:** `local-ollama/qwen3.5:9b-q4_K_M` en `http://127.0.0.1:11434/v1` (servicio `ollama.service`). 6.6 GB Q4_K_M, Apache-2.0, contexto Ollama 8192. Usa `/api/chat` nativo con `think:false` (el shim OpenAI ignora ese flag), 100% GPU y ~62 tok/s.
+## Fallback local (Ollama + llama-cpp-python opcional + NCM)
+- **Principal:** `local-ollama/qwen3-coder-opt:latest` en `http://127.0.0.1:11434/v1` (servicio `ollama.service`). Qwen3-MoE 30.5B Q4_K_M, contexto 16384, `/api/chat` nativo con `think:false`. En RTX 3070 Laptop 8 GB midió ~21.9 tok/s de evaluación.
+- **Tools:** `local-ollama` conserva el ciclo `assistant.tool_calls → tool → respuesta`; los clientes reciben `finish_reason="tool_calls"` y SSE con tools. El soporte depende del modelo elegido.
+- **Opcional experimental:** `local-llamacpp/qwen3-coder-opt` usa el servidor OpenAI-compatible de `llama-cpp-python` en `127.0.0.1:11438` y parsea los tool calls XML de Qwen3-Coder. Es opt-in (`LOCAL_LLAMACPP_ENABLED=0`): con 30B y 8 GB solo caben ~12–16 capas en GPU y midió ~7 tok/s, más lento que Ollama. No se inicia ni se habilita solo. Arranque manual: `./deploy/llamacpp-server.sh`; unidad opcional `deploy/free-ai-llamacpp.service`.
 - **Último recurso:** `ncm/ncm-instruct-725m` (725M, contexto 128, CC BY-NC-SA 4.0, opt-in). **No ejecutar ambos en 8 GB de VRAM.**
 - **NCM oficial explícito:** `ncm-lm1b/ncm-lm1b-large` (725M, unconditional, 128 tokens fijos, ignora el prompt; servicio `ncm-lm1b.service`). No se enruta en `auto`; es solo para experimentación explícita.
 - **Benchmark NCM local:** `python3 local/ncm/benchmark_ncm.py --batches 1,2,4 --repeats 5 --warmup 1` mide latencia p50/p95 y throughput del servicio activo. Evidencia: `docs/progress/2026-11-08-ncm-local-benchmark.md` y `.json`.
 - **Operación NCM:** `./gateway.sh ncm-status`, `./gateway.sh ncm-test`, `./gateway.sh ncm-benchmark 5`; sincronización repo→runtime con `./deploy/sync-ncm-lm1b.sh check|apply|restart`. Ver `local/ncm/README.md`.
-- `auto` ordena: remotos gratuitos → `local-ollama` → `ncm` (si está activo) → segundos modelos remotos. Con `max_attempts=4`, Qwen entra en el 4.º intento.
-- Variables: `LOCAL_OLLAMA_ENABLED=1`, `LOCAL_OLLAMA_BASE_URL`, `LOCAL_OLLAMA_MODEL`; NCM con `NCM_LOCAL_ENABLED=0` por defecto.
+- `auto` ordena: remotos gratuitos → `local-ollama` → `local-llamacpp` (si está activo) → `ncm` (si está activo) → segundos modelos remotos.
+- Variables: `LOCAL_OLLAMA_ENABLED`, `LOCAL_OLLAMA_BASE_URL`, `LOCAL_OLLAMA_MODEL`, `LOCAL_LLAMACPP_ENABLED`, `LOCAL_LLAMACPP_BASE_URL`, `LOCAL_LLAMACPP_MODEL`, `LOCAL_LLAMACPP_TIMEOUT`; NCM con `NCM_LOCAL_ENABLED=0` por defecto.
 - NCM conserva la capa `thinker-lite` (clean-room, inspirada en [jmbigi/thinker](https://github.com/jmbigi/thinker), GPL-3.0-only): matemática determinista, best-of-3, validación y reparación honesta.
-- Evidencia: `docs/progress/2026-11-08-qwen-local-fallback.md` y `docs/progress/2026-11-08-ncm-local-fallback.md`.
+- Evidencia: `docs/progress/2026-11-09-llamacpp-tools.md`, `docs/progress/2026-11-08-qwen-local-fallback.md` y `docs/progress/2026-11-08-ncm-local-fallback.md`.
 
 ## Agregar proveedores/cuentas
 En `.env` (gitignored): `OPENROUTER_API_KEY`, `HUGGINGFACE_API_KEY`/`HUGGING_FACE_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY`, Cloudflare/Mistral/SambaNova/Cerebras/Together/Cohere/DeepSeek/Moonshot/OpenCode/custom OpenAI-compatible. Reinicio/recarga según caso; `GET /v1/providers` para estado real.

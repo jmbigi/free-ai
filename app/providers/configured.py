@@ -7,7 +7,10 @@ import httpx
 
 from .openai_compat import OpenAICompatProvider
 from .base import ModelInfo, ProviderError, parse_retry_after
+from .ollama_tools import build_completion, stream_delta, to_ollama_messages
+from .llamacpp_tools import extract_content_tool_calls, openai_tool_calls, to_llamacpp_messages
 from ..config import settings
+from ..normalize import normalize_chat_response
 
 class _S(OpenAICompatProvider):
     @property
@@ -205,7 +208,7 @@ class OllamaLocalProvider(_S):
     @property
     def default_models(self):
         m = settings.local_ollama_model
-        return [(m, m, ["chat"], "Local Ollama model; Apache-2.0 (Qwen3.5); 8GB VRAM; experimental fallback.")]
+        return [(m, m, ["chat", "tools"], "Local Ollama model; tools when the selected model supports them; experimental fallback.")]
 
     async def list_models(self):
         # Expose only the configured safe model. Other local models can still be
@@ -214,8 +217,8 @@ class OllamaLocalProvider(_S):
         m = settings.local_ollama_model
         return [ModelInfo(
             id=f"{self.id}/{m}", provider=self.id, owned_by=self.id,
-            upstream_model=m, capabilities=["chat"],
-            note="Configured local Ollama fallback; not a guarantee of upstream quality.",
+            upstream_model=m, capabilities=["chat", "tools"],
+            note="Configured local Ollama fallback; tool support depends on the model.",
         )]
 
     def _native_url(self) -> str:
@@ -226,18 +229,9 @@ class OllamaLocalProvider(_S):
         requested = int(payload.get("max_tokens") or payload.get("max_completion_tokens") or 0)
         minimum = int(getattr(settings, "local_ollama_min_tokens", 512) or 512)
         num_predict = max(requested, minimum) if requested else minimum
-        messages = []
-        for m in payload.get("messages") or []:
-            content = m.get("content")
-            if isinstance(content, list):
-                content = " ".join(
-                    str(x.get("text") or x.get("content") or "") if isinstance(x, dict) else str(x)
-                    for x in content
-                )
-            messages.append({"role": m.get("role", "user"), "content": str(content or "")})
         body = {
             "model": model.upstream_model or model.id,
-            "messages": messages,
+            "messages": to_ollama_messages(payload.get("messages") or []),
             "stream": False,
             "think": bool(settings.local_ollama_think),
             "options": {
@@ -251,6 +245,8 @@ class OllamaLocalProvider(_S):
             body["options"]["stop"] = payload["stop"]
         if payload.get("tools"):
             body["tools"] = payload["tools"]
+        if payload.get("tool_choice"):
+            body["tool_choice"] = payload["tool_choice"]
         return body
 
     async def chat(self, payload, model):
@@ -266,41 +262,33 @@ class OllamaLocalProvider(_S):
             )
         data = r.json()
         msg = data.get("message") or {}
-        content = str(msg.get("content") or "")
-        thinking = str(msg.get("thinking") or "")
-        if not content and thinking:
+        content = msg.get("content")
+        thinking = msg.get("thinking")
+        tool_calls = msg.get("tool_calls") or []
+        if not content and not tool_calls and thinking:
             raise ProviderError(
                 "Ollama returned only thinking; set LOCAL_OLLAMA_THINK=0 or increase tokens.",
                 status=502, provider=self.id,
             )
-        if not content:
+        if not content and not tool_calls:
             raise ProviderError("Ollama returned empty content", status=502, provider=self.id)
-        prompt_tokens = int(data.get("prompt_eval_count") or 0)
-        completion_tokens = int(data.get("eval_count") or 0)
-        out = {
-            "id": f"chatcmpl-ollama-{uuid.uuid4().hex[:16]}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": body["model"],
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": content, **({"reasoning": thinking} if thinking else {})},
-                "finish_reason": "stop",
-            }],
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-            },
-            "provider": self.id,
-            "requested_model": model.id,
-            "gateway": {
-                "local": True, "ollama": True,
+        out = build_completion(
+            model=body["model"],
+            content=content,
+            thinking=thinking,
+            raw_tool_calls=tool_calls,
+            prompt_tokens=int(data.get("prompt_eval_count") or 0),
+            completion_tokens=int(data.get("eval_count") or 0),
+            completion_id=f"chatcmpl-ollama-{uuid.uuid4().hex[:16]}",
+            created=int(time.time()),
+            provider=self.id,
+            gateway_extra={
                 "think": bool(settings.local_ollama_think),
                 "num_ctx": int(settings.local_ollama_ctx),
                 "num_predict": int(body["options"]["num_predict"]),
             },
-        }
+        )
+        out["requested_model"] = model.id
         return out
 
     async def stream_chat(self, payload, model):
@@ -323,6 +311,7 @@ class OllamaLocalProvider(_S):
                         status=r.status_code, provider=self.id,
                     )
                 done_seen = False
+                tool_calls_seen = False
                 async for line in r.aiter_lines():
                     if not line:
                         continue
@@ -334,14 +323,14 @@ class OllamaLocalProvider(_S):
                             status=502, provider=self.id,
                         ) from exc
                     msg = data.get("message") or {}
-                    content = str(msg.get("content") or "")
-                    thinking = str(msg.get("thinking") or "")
-                    if content or thinking:
-                        delta = {"role": "assistant"}
-                        if content:
-                            delta["content"] = content
-                        if thinking:
-                            delta["reasoning"] = thinking
+                    delta = stream_delta(
+                        content=msg.get("content"),
+                        thinking=msg.get("thinking"),
+                        raw_tool_calls=msg.get("tool_calls") or [],
+                    )
+                    if len(delta) > 1:
+                        if "tool_calls" in delta:
+                            tool_calls_seen = True
                         chunk = {
                             "id": stream_id,
                             "object": "chat.completion.chunk",
@@ -357,7 +346,7 @@ class OllamaLocalProvider(_S):
                             "object": "chat.completion.chunk",
                             "created": created,
                             "model": body["model"],
-                            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls" if tool_calls_seen else "stop"}],
                         }
                         yield f"data: {json.dumps(final, ensure_ascii=False)}\n\n".encode()
                         yield b"data: [DONE]\n\n"
@@ -367,6 +356,134 @@ class OllamaLocalProvider(_S):
                         "Ollama stream ended without done marker",
                         status=502, provider=self.id,
                     )
+
+
+class LlamaCppLocalProvider(_S):
+    """Optional llama-cpp-python OpenAI-compatible local server.
+
+    llama.cpp's Qwen3-Coder GGUF template emits XML tool calls as text.  This
+    provider converts them to OpenAI ``tool_calls`` and converts tool-call
+    argument strings back to mappings for the template.  Tool-bearing requests
+    are buffered (non-stream upstream) so the XML is never leaked to clients;
+    plain text requests keep the upstream stream.
+    """
+    id = "local-llamacpp"; label = "Qwen3-Coder local (llama-cpp-python, optional)"
+
+    @property
+    def base_url(self): return settings.local_llamacpp_base_url
+
+    @property
+    def api_key(self): return "local" if settings.local_llamacpp_enabled else ""
+
+    def available(self): return bool(settings.local_llamacpp_enabled and self.base_url)
+
+    @property
+    def default_models(self):
+        m = settings.local_llamacpp_model
+        return [(m, m, ["chat", "tools"], "Local llama.cpp GGUF; tools via XML parsing; optional backend.")]
+
+    async def list_models(self):
+        m = settings.local_llamacpp_model
+        return [ModelInfo(
+            id=f"{self.id}/{m}", provider=self.id, owned_by=self.id,
+            upstream_model=m, capabilities=["chat", "tools"],
+            note="Optional llama-cpp-python local backend; tool support via XML parsing.",
+        )]
+
+    def _prepare(self, payload: dict, upstream: str) -> dict:
+        body = super()._prepare(payload, upstream)
+        body["messages"] = to_llamacpp_messages(body.get("messages") or [])
+        return body
+
+    @staticmethod
+    def _convert_response(data: dict, model_id: str, provider: str, allow_bare_json: bool = False) -> dict:
+        choices = data.get("choices") if isinstance(data, dict) else None
+        total_calls = 0
+        for ch in choices or []:
+            if not isinstance(ch, dict):
+                continue
+            msg = ch.get("message") if isinstance(ch.get("message"), dict) else None
+            if msg is None:
+                continue
+            calls = openai_tool_calls(msg.get("tool_calls") or [])
+            clean, content_calls = extract_content_tool_calls(msg.get("content"), allow_bare_json=allow_bare_json)
+            calls.extend(content_calls)
+            if calls:
+                msg["content"] = clean
+                msg["tool_calls"] = calls
+                ch["finish_reason"] = "tool_calls"
+                total_calls += len(calls)
+        if isinstance(data, dict):
+            data["provider"] = provider
+            data["requested_model"] = model_id
+            gw = data.get("gateway") if isinstance(data.get("gateway"), dict) else {}
+            gw.update({"local": True, "llamacpp": True, "tool_calls": total_calls})
+            data["gateway"] = gw
+        return normalize_chat_response(data)
+
+    async def chat(self, payload: dict, model: ModelInfo) -> dict:
+        body = self._prepare(payload, model.upstream_model or model.id)
+        body["stream"] = False
+        timeout = httpx.Timeout(float(settings.local_llamacpp_timeout), connect=8.0)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as c:
+                r = await c.post(
+                    f"{self.base_url.rstrip('/')}/chat/completions",
+                    json=body, headers=self._headers(),
+                )
+        except httpx.HTTPError as exc:
+            raise ProviderError(
+                f"{self.label} connection error: {exc}",
+                status=502, provider=self.id,
+            ) from exc
+        if r.status_code >= 400:
+            raise ProviderError(
+                f"{self.label} error {r.status_code}: {r.text[:350]}",
+                status=r.status_code, provider=self.id,
+                retry_after=parse_retry_after(r.headers.get("retry-after")),
+            )
+        data = r.json()
+        return self._convert_response(data, model.id, self.id, allow_bare_json=bool(payload.get("tools")))
+
+    async def stream_chat(self, payload: dict, model: ModelInfo):
+        # Tool calls are parsed from the complete XML block, so use a buffered
+        # completion and emit a valid OpenAI SSE sequence.  This avoids leaking
+        # raw <tool_call> XML into agent clients.
+        if not payload.get("tools"):
+            async for chunk in super().stream_chat(payload, model):
+                yield chunk
+            return
+        data = await self.chat(payload, model)
+        ch = (data.get("choices") or [{}])[0]
+        msg = ch.get("message") or {}
+        content = msg.get("content") or ""
+        calls = msg.get("tool_calls") or []
+        stream_id = data.get("id") or f"chatcmpl-llamacpp-{uuid.uuid4().hex[:16]}"
+        created = int(data.get("created") or time.time())
+        model_name = data.get("model") or model.id
+
+        def event(delta: dict, finish=None, usage=None) -> bytes:
+            obj = {
+                "id": stream_id, "object": "chat.completion.chunk",
+                "created": created, "model": model_name,
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+            }
+            if usage is not None:
+                obj["usage"] = usage
+            return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode()
+
+        yield event({"role": "assistant", "content": content} if content else {"role": "assistant"})
+        if calls:
+            indexed = []
+            for idx, call in enumerate(calls):
+                call = dict(call)
+                call["index"] = idx
+                indexed.append(call)
+            yield event({"tool_calls": indexed})
+            yield event({}, "tool_calls", data.get("usage"))
+        else:
+            yield event({}, "stop", data.get("usage"))
+        yield b"data: [DONE]\n\n"
 
 
 class NCMProvider(_S):

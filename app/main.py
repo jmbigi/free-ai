@@ -365,7 +365,7 @@ async def _free_response(_: bool = Depends(require_api_key_flexible)):
     ctrl = free_control_info()
     def is_free_id(m):
         mid = (m.get('id') or '').lower(); up = (m.get('upstream_model') or '').lower(); prov=(m.get('provider') or '').lower()
-        return prov in ('pollinations','ncm','local-ollama','ncm-lm1b') or ':free' in mid or ':free' in up or mid.endswith('/free') or (prov=='openrouter' and up=='free')
+        return prov in ('pollinations','ncm','local-ollama','local-llamacpp','ncm-lm1b') or ':free' in mid or ':free' in up or mid.endswith('/free') or (prov=='openrouter' and up=='free')
     free_models = [m for m in models if m.get('id')!='auto' and is_free_id(m)]
     return {
         'object':'free_control','status':'ok','time':int(time.time()),
@@ -419,7 +419,7 @@ async def _audit_response(_: bool = Depends(require_api_key_flexible)):
     rt = runtime_status()
     def free_sig(m):
         mid=(m.get('id') or '').lower(); up=(m.get('upstream_model') or '').lower(); prov=(m.get('provider') or '').lower()
-        return prov in ('pollinations','ncm','local-ollama','ncm-lm1b') or ':free' in mid or ':free' in up or mid.endswith('/free') or (prov=='openrouter' and up=='free')
+        return prov in ('pollinations','ncm','local-ollama','local-llamacpp','ncm-lm1b') or ':free' in mid or ':free' in up or mid.endswith('/free') or (prov=='openrouter' and up=='free')
     clearly=[m for m in models if m.get('id')!='auto' and free_sig(m)]
     active=[p for p in providers if p.get('active')]
     return {
@@ -834,7 +834,7 @@ async def _project_generate(request: Request, _: bool = Depends(require_api_key_
         raise HTTPException(status_code=400, detail=_openai_error('prompt/objective required', type_='invalid_request_error', code=400, param='prompt', request_id=getattr(request.state,'request_id','')))
     name = str(body.get('name') or 'generated-project')[:120]
     model = str(body.get('model') or 'auto')
-    if getattr(settings, 'free_only', True) and model != 'auto' and not any(x in model.lower() for x in [':free','/free','pollinations/']):
+    if getattr(settings, 'free_only', True) and model != 'auto' and not any(x in model.lower() for x in [':free','/free','pollinations/','local-ollama/','local-llamacpp/','ncm','ncm-lm1b/']):
         raise HTTPException(status_code=403, detail=_openai_error(f'FREE_ONLY blocks non-free model selection: {model}', type_='forbidden', code=403, request_id=getattr(request.state,'request_id','')))
     res = await _project_generate_one(
         prompt=prompt, name=name, model=model,

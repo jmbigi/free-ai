@@ -202,6 +202,26 @@ class SettingsProxy:
     def local_ollama_ctx(self) -> int:
         return max(1024, _read_int("LOCAL_OLLAMA_CTX", 8192))
 
+    # Optional llama-cpp-python local backend (OpenAI-compatible server).
+    # It is deliberately separate from Ollama: Ollama remains the default local
+    # engine; this backend is opt-in and intended for models that fit fully in
+    # VRAM or for benchmark comparisons.
+    @property
+    def local_llamacpp_enabled(self) -> bool:
+        return _read_bool("LOCAL_LLAMACPP_ENABLED", False)
+
+    @property
+    def local_llamacpp_base_url(self) -> str:
+        return _read_env("LOCAL_LLAMACPP_BASE_URL", "http://127.0.0.1:11438/v1").rstrip("/")
+
+    @property
+    def local_llamacpp_model(self) -> str:
+        return _read_env("LOCAL_LLAMACPP_MODEL", "qwen3-coder-opt")
+
+    @property
+    def local_llamacpp_timeout(self) -> int:
+        return max(10, _read_int("LOCAL_LLAMACPP_TIMEOUT", 600))
+
     # Official NCM LM1B-large (unconditional; explicit model only).
     @property
     def ncm_lm1b_enabled(self) -> bool:
