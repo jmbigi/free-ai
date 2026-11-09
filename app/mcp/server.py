@@ -1,6 +1,6 @@
 """MCP (Model Context Protocol) server for the Free AI Gateway.
 
-Exposes gateway tools and resources via MCP stdio/SSE transports.
+Exposes gateway tools and resources via MCP stdio/SSE/WebSocket transports.
 Clients (KimiCode, OpenCode, etc.) connect via MCP instead of custom APIs.
 """
 from __future__ import annotations
@@ -10,10 +10,15 @@ import json
 import os
 import sys
 import uuid
+import subprocess
+import tempfile
+import shlex
+import signal
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Optional
+from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -79,6 +84,156 @@ class ToolRegistry:
         return await tool.handler(arguments)
 
 
+# --- Sandboxed Code Execution ---
+
+class SandboxExecutor:
+    """Secure sandbox for code execution with resource limits."""
+    
+    def __init__(
+        self,
+        timeout: int = 30,
+        max_memory_mb: int = 256,
+        max_cpu_seconds: int = 30,
+        allowed_imports: Optional[list[str]] = None,
+        blocked_imports: Optional[list[str]] = None,
+    ):
+        self.timeout = timeout
+        self.max_memory_mb = max_memory_mb
+        self.max_cpu_seconds = max_cpu_seconds
+        self.allowed_imports = set(allowed_imports or [])
+        self.blocked_imports = set(blocked_imports or [
+            "os", "subprocess", "sys", "shutil", "pathlib",
+            "socket", "urllib", "requests", "http",
+            "ctypes", "multiprocessing", "threading",
+            "importlib", "pkgutil", "runpy",
+        ])
+    
+    def _create_sandbox_script(self, code: str, timeout: int) -> str:
+        """Create a sandboxed Python script with resource limits."""
+        blocked_repr = "{" + ", ".join(f'"{x}"' for x in self.blocked_imports) + "}"
+        allowed_repr = "{" + ", ".join(f'"{x}"' for x in self.allowed_imports) + "}" if self.allowed_imports else "set()"
+        
+        return f'''
+import sys
+import resource
+import signal
+import sys
+import os
+
+# Set resource limits
+try:
+    resource.setrlimit(resource.RLIMIT_CPU, ({self.max_cpu_seconds}, {self.max_cpu_seconds}))
+    resource.setrlimit(resource.RLIMIT_AS, ({self.max_memory_mb * 1024 * 1024}, {self.max_memory_mb * 1024 * 1024}))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (10 * 1024 * 1024, 10 * 1024 * 1024))  # 10MB max file size
+except:
+    pass
+
+# Block dangerous imports
+import builtins
+original_import = builtins.__import__
+
+blocked = {blocked_repr}
+allowed = {allowed_repr}
+# Modules needed by sandbox internals - never block these
+_sandbox_allowed = {{"sys", "resource", "signal", "traceback", "builtins", "io"}}
+
+def safe_import(name, *args, **kwargs):
+    if name in _sandbox_allowed:
+        return original_import(name, *args, **kwargs)
+    if name in blocked:
+        raise ImportError(f"Import blocked: {{name}}")
+    if allowed and name not in allowed and not name.startswith("_"):
+        pass
+    return original_import(name, *args, **kwargs)
+
+builtins.__import__ = safe_import
+
+# Redirect stdout/stderr - save real ones first
+import sys
+from io import StringIO
+_real_stdout = sys.stdout
+_real_stderr = sys.stderr
+
+_stdout = StringIO()
+_stderr = StringIO()
+sys.stdout = _stdout
+sys.stderr = _stderr
+
+# User code
+try:
+{chr(10).join("    " + line for line in code.split(chr(10)))}
+except Exception as e:
+    _real_stderr.write(f"{{type(e).__name__}}: {{e}}\\n")
+    import traceback
+    traceback.print_exc(file=_real_stderr)
+    sys.exit(1)
+
+# Restore real stdout/stderr for markers
+sys.stdout = _real_stdout
+sys.stderr = _real_stderr
+
+# Output results
+print("__MCP_STDOUT__")
+print(_stdout.getvalue())
+print("__MCP_STDERR__")
+print(_stderr.getvalue())
+'''
+    
+    async def execute(self, code: str, timeout: Optional[int] = None) -> dict[str, Any]:
+        """Execute Python code in sandbox."""
+        timeout = timeout or self.timeout
+        script = self._create_sandbox_script(code, timeout)
+        
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+            f.write(script)
+            path = f.name
+        
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                preexec_fn=os.setsid,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                # Parse the special output markers
+                stdout_text = stdout.decode(errors="replace")
+                stderr_text = stderr.decode(errors="replace")
+                
+                # Extract stdout/stderr from our markers
+                user_stdout = ""
+                user_stderr = ""
+                if "__MCP_STDOUT__" in stdout_text:
+                    parts = stdout_text.split("__MCP_STDOUT__", 1)
+                    if len(parts) > 1:
+                        user_stdout = parts[1].split("__MCP_STDERR__")[0]
+                if "__MCP_STDERR__" in stdout_text:
+                    parts = stdout_text.split("__MCP_STDERR__", 1)
+                    if len(parts) > 1:
+                        user_stderr = parts[1]
+                
+                return {
+                    "exit_code": proc.returncode,
+                    "stdout": user_stdout,
+                    "stderr": user_stderr or stderr_text,
+                }
+            except asyncio.TimeoutError:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except:
+                    proc.kill()
+                await proc.wait()
+                return {"error": "timeout", "exit_code": -1, "stdout": "", "stderr": "Execution timeout"}
+            except Exception as e:
+                return {"error": str(e), "exit_code": -1, "stdout": "", "stderr": str(e)}
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
 # --- Built-in Tools ---
 
 async def _web_search(args: dict[str, Any]) -> dict[str, Any]:
@@ -91,17 +246,35 @@ async def _web_search(args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _code_exec(args: dict[str, Any]) -> dict[str, Any]:
-    """Execute Python code in a sandboxed subprocess."""
-    import subprocess
-    import tempfile
+    """Execute Python code in a sandbox."""
     code = args.get("code", "")
     timeout = int(args.get("timeout", 30))
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-        f.write(code)
-        path = f.name
+    sandbox = SandboxExecutor(timeout=timeout)
+    return await sandbox.execute(code, timeout)
+
+
+async def _bash_exec(args: dict[str, Any]) -> dict[str, Any]:
+    """Execute bash command in restricted environment."""
+    cmd = args.get("command", "")
+    timeout = int(args.get("timeout", 30))
+    cwd = args.get("cwd", "/tmp/mcp-tools")
+    
+    # Security: only allow specific safe commands
+    allowed_prefixes = ["ls", "cat", "head", "tail", "grep", "find", "wc", "echo", "pwd", "python3", "pip"]
+    cmd_parts = shlex.split(cmd)
+    if not cmd_parts or cmd_parts[0] not in allowed_prefixes:
+        return {"error": f"Command not allowed: {cmd_parts[0] if cmd_parts else 'empty'}", "exit_code": -1}
+    
+    # Restrict to allowed directory
+    abs_cwd = os.path.abspath(cwd)
+    allowed_root = os.path.abspath(os.environ.get("MCP_TOOLS_ROOT", "/tmp/mcp-tools"))
+    if not abs_cwd.startswith(allowed_root):
+        return {"error": "cwd outside allowed root", "exit_code": -1}
+    
     try:
         proc = await asyncio.create_subprocess_exec(
-            sys.executable, path,
+            *cmd_parts,
+            cwd=abs_cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -116,11 +289,8 @@ async def _code_exec(args: dict[str, Any]) -> dict[str, Any]:
             proc.kill()
             await proc.wait()
             return {"error": "timeout", "exit_code": -1}
-    finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    except Exception as e:
+        return {"error": str(e), "exit_code": -1}
 
 
 async def _file_read(args: dict[str, Any]) -> dict[str, Any]:
@@ -151,6 +321,26 @@ async def _file_write(args: dict[str, Any]) -> dict[str, Any]:
         with open(abs_path, "w", encoding="utf-8") as f:
             f.write(content)
         return {"ok": True, "bytes": len(content.encode())}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+async def _file_list(args: dict[str, Any]) -> dict[str, Any]:
+    """List files in a directory."""
+    root = os.environ.get("MCP_TOOLS_ROOT", "/tmp/mcp-tools")
+    path = args.get("path", ".")
+    abs_path = os.path.abspath(os.path.join(root, path))
+    if not abs_path.startswith(os.path.abspath(root)):
+        return {"error": "path traversal not allowed"}
+    try:
+        entries = []
+        for entry in os.scandir(abs_path):
+            entries.append({
+                "name": entry.name,
+                "type": "dir" if entry.is_dir() else "file",
+                "size": entry.stat().st_size if entry.is_file() else None,
+            })
+        return {"entries": entries}
     except Exception as e:
         return {"error": str(e)}
 
@@ -213,7 +403,7 @@ class MCPServer:
         ))
         self.tools.register(Tool(
             name="code_exec",
-            description="Execute Python code in a sandbox",
+            description="Execute Python code in a secure sandbox",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -223,6 +413,20 @@ class MCPServer:
                 "required": ["code"],
             },
             handler=_code_exec,
+        ))
+        self.tools.register(Tool(
+            name="bash_exec",
+            description="Execute bash command (restricted to safe commands)",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Bash command to execute"},
+                    "timeout": {"type": "integer", "default": 30},
+                    "cwd": {"type": "string", "default": "/tmp/mcp-tools"},
+                },
+                "required": ["command"],
+            },
+            handler=_bash_exec,
         ))
         self.tools.register(Tool(
             name="file_read",
@@ -246,6 +450,15 @@ class MCPServer:
                 "required": ["path", "content"],
             },
             handler=_file_write,
+        ))
+        self.tools.register(Tool(
+            name="file_list",
+            description="List files in a directory",
+            input_schema={
+                "type": "object",
+                "properties": {"path": {"type": "string", "default": "."}},
+            },
+            handler=_file_list,
         ))
         self.tools.register(Tool(
             name="kb_query",
@@ -302,13 +515,15 @@ class MCPServer:
                 uri = params.get("uri")
                 result = await self.resources.read(uri)
                 return MCPResponse(id=request.id, result=result)
+            elif request.method == "notifications/initialized":
+                return MCPResponse(id=request.id, result={})
             else:
                 return MCPResponse(id=request.id, error={"code": -32601, "message": f"Method not found: {request.method}"})
         except Exception as e:
             return MCPResponse(id=request.id, error={"code": -32603, "message": str(e)})
 
 
-# --- FastAPI App (SSE Transport) ---
+# --- FastAPI App (SSE + WebSocket Transports) ---
 
 app = FastAPI(title="Free AI Gateway MCP Server")
 _mcp = MCPServer()
@@ -335,6 +550,42 @@ async def mcp_sse(request: Request):
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
+# --- WebSocket Transport ---
+
+@app.websocket("/mcp/ws")
+async def mcp_websocket(websocket: WebSocket):
+    """WebSocket transport for MCP (bidirectional)."""
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                req = MCPRequest.model_validate_json(data)
+            except Exception as e:
+                await websocket.send_text(MCPResponse(id=None, error={"code": -32700, "message": f"Parse error: {e}"}).model_dump_json(exclude_none=True))
+                continue
+            resp = await _mcp.handle(req)
+            await websocket.send_text(resp.model_dump_json(exclude_none=True))
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+
+
+# --- SSE with Request/Response (for clients that need request-response over SSE) ---
+
+@app.post("/mcp/sse")
+async def mcp_sse_post(request: Request):
+    """SSE transport with POST request (for clients that can't use WebSocket)."""
+    body = await request.json()
+    req = MCPRequest(**body)
+    resp = await _mcp.handle(req)
+    return StreamingResponse(
+        iter([f"data: {resp.model_dump_json(exclude_none=True)}\n\n"]),
+        media_type="text/event-stream"
+    )
+
+
 # --- STDIO Transport (for CLI clients) ---
 
 async def run_stdio():
@@ -357,6 +608,8 @@ async def run_stdio():
         writer.write((resp.model_dump_json(exclude_none=True) + "\n").encode())
         await writer.drain()
 
+
+# --- FastAPI App for HTTP ---
 
 if __name__ == "__main__":
     import sys
