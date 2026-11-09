@@ -359,18 +359,87 @@ class OllamaLocalProvider(_S):
         base = self.base_url.removesuffix("/v1").rstrip("/")
         return f"{base}/api/chat"
 
-    def _body(self, payload, model) -> dict:
+    @staticmethod
+    def _msg_chars(messages) -> int:
+        total = 0
+        for m in messages:
+            c = m.get("content")
+            if isinstance(c, str):
+                total += len(c)
+            elif isinstance(c, list):
+                for part in c:
+                    if isinstance(part, dict):
+                        total += len(str(part.get("text") or part.get("content") or ""))
+            for tc in (m.get("tool_calls") or []):
+                if isinstance(tc, dict):
+                    total += len(str(tc.get("function", {}).get("arguments", "")))
+        return total
+
+    def _trim_to_ctx(self, messages: list[dict], ctx: int, reserved: int) -> tuple[list[dict], dict]:
+        """Fit Ollama messages into the local context window.
+
+        KimiCode/OpenCode may send 128k-scale contexts; Ollama would silently
+        truncate and break tool-call chains. Keep system prompts and the newest
+        turns, preserving assistant(tool_calls) -> tool pairs.
+        """
+        # ~3.5 chars/token for mixed English/Spanish/code; keep a safety margin.
+        budget = int(max(2000, (max(1024, ctx) - min(reserved, max(512, ctx // 2))) * 3.5))
+        before = self._msg_chars(messages)
+        if before <= budget:
+            return messages, {"context_trimmed": False, "context_chars_before": before, "context_chars_after": before, "local_ctx": ctx}
+
+        system = [m for m in messages if str(m.get("role")) in ("system", "developer")][-2:]
+        rest = [m for m in messages if str(m.get("role")) not in ("system", "developer")]
+        # Keep newest messages first; grow from the end.
+        kept: list[dict] = []
+        for m in reversed(rest):
+            candidate = [m] + kept
+            if self._msg_chars(system + candidate) > budget and kept:
+                break
+            kept = candidate
+        # Repair tool chain: a leading tool message needs its assistant tool_calls.
+        if kept and str(kept[0].get("role")) == "tool":
+            idx = len(rest) - len(kept) - 1
+            if idx >= 0 and str(rest[idx].get("role")) == "assistant":
+                kept = [rest[idx]] + kept
+        out = system + kept
+        # Final safety: hard-truncate individual oversized contents.
+        after = self._msg_chars(out)
+        if after > budget and out:
+            ratio = budget / max(1, after)
+            for m in out:
+                c = m.get("content")
+                if isinstance(c, str) and len(c) > 200:
+                    m["content"] = c[: max(200, int(len(c) * ratio))] + " …[truncated to local ctx]…"
+        after = self._msg_chars(out)
+        return out, {
+            "context_trimmed": True,
+            "context_chars_before": before,
+            "context_chars_after": after,
+            "local_ctx": ctx,
+            "policy": "local Ollama context budget; system+newest turns preserved",
+        }
+
+    def _body(self, payload, model, *, with_meta: bool = False):
         requested = int(payload.get("max_tokens") or payload.get("max_completion_tokens") or 0)
         minimum = int(getattr(settings, "local_ollama_min_tokens", 512) or 512)
         num_predict = max(requested, minimum) if requested else minimum
+        messages, trim_meta = self._trim_to_ctx(
+            to_ollama_messages(payload.get("messages") or []),
+            int(settings.local_ollama_ctx),
+            num_predict,
+        )
         body = {
             "model": model.upstream_model or model.id,
-            "messages": to_ollama_messages(payload.get("messages") or []),
+            "messages": messages,
             "stream": False,
             "think": bool(settings.local_ollama_think),
+            # Keep the model resident: avoids a 20-30s reload before every request.
+            "keep_alive": settings.local_ollama_keep_alive,
             "options": {
                 "num_ctx": int(settings.local_ollama_ctx),
                 "num_predict": num_predict,
+                "num_batch": int(settings.local_ollama_num_batch),
                 "temperature": float(payload.get("temperature") or 0),
                 "top_p": float(payload.get("top_p") or 1.0),
             },
@@ -381,10 +450,12 @@ class OllamaLocalProvider(_S):
             body["tools"] = payload["tools"]
         if payload.get("tool_choice"):
             body["tool_choice"] = payload["tool_choice"]
+        if with_meta:
+            return body, trim_meta
         return body
 
     async def chat(self, payload, model):
-        body = self._body(payload, model)
+        body, trim_meta = self._body(payload, model, with_meta=True)
         timeout = httpx.Timeout(float(getattr(settings, "request_timeout", 120) or 120), connect=8.0)
         async with httpx.AsyncClient(timeout=timeout) as c:
             r = await c.post(self._native_url(), json=body)
@@ -420,13 +491,16 @@ class OllamaLocalProvider(_S):
                 "think": bool(settings.local_ollama_think),
                 "num_ctx": int(settings.local_ollama_ctx),
                 "num_predict": int(body["options"]["num_predict"]),
+                "keep_alive": body["keep_alive"],
+                "num_batch": int(body["options"]["num_batch"]),
+                "local_context": trim_meta,
             },
         )
         out["requested_model"] = model.id
         return out
 
     async def stream_chat(self, payload, model):
-        body = self._body(payload, model)
+        body, trim_meta = self._body(payload, model, with_meta=True)
         body["stream"] = True
         stream_id = f"chatcmpl-ollama-{uuid.uuid4().hex[:16]}"
         created = int(time.time())
@@ -475,12 +549,20 @@ class OllamaLocalProvider(_S):
                         yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode()
                     if data.get("done"):
                         done_seen = True
+                        prompt_tokens = int(data.get("prompt_eval_count") or 0)
+                        completion_tokens = int(data.get("eval_count") or 0)
                         final = {
                             "id": stream_id,
                             "object": "chat.completion.chunk",
                             "created": created,
                             "model": body["model"],
                             "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls" if tool_calls_seen else "stop"}],
+                            "usage": {
+                                "prompt_tokens": prompt_tokens,
+                                "completion_tokens": completion_tokens,
+                                "total_tokens": prompt_tokens + completion_tokens,
+                            },
+                            "gateway": {"local": True, "ollama": True, "tool_calls": 0, "local_context": trim_meta},
                         }
                         yield f"data: {json.dumps(final, ensure_ascii=False)}\n\n".encode()
                         yield b"data: [DONE]\n\n"

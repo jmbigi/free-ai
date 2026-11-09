@@ -45,6 +45,32 @@ app.add_middleware(
     allow_methods=["*"], allow_headers=["*"], expose_headers=["*"],
 )
 
+# Diagnostic access log: identify clients that fail auth or hit the gateway,
+# without ever logging keys. Enabled with GATEWAY_ACCESS_LOG=1 (default on).
+@app.middleware("http")
+async def _access_diag(request: Request, call_next):
+    response = await call_next(request)
+    try:
+        from .config import settings as _s
+        if getattr(_s, 'access_log', True):
+            path = request.url.path
+            ua = (request.headers.get("user-agent") or "-")[:80]
+            has_auth = bool(
+                request.headers.get("authorization")
+                or request.headers.get("api-key")
+                or request.headers.get("x-api-key")
+                or request.query_params.get("key")
+            )
+            if response.status_code in (401, 403) or path.startswith(("/v1/chat", "/v1/completions")):
+                import logging as _lg
+                _lg.getLogger("free-ai.access").info(
+                    "%s %s -> %s ua=%s auth=%s",
+                    request.method, path, response.status_code, ua, "yes" if has_auth else "NO",
+                )
+    except Exception:
+        pass
+    return response
+
 REQUEST_ID_HEADER = "x-request-id"
 MAX_BODY_BYTES = 2 * 1024 * 1024  # 2 MiB safety cap for JSON payloads
 
@@ -444,17 +470,27 @@ async def _audit_response(_: bool = Depends(require_api_key_flexible)):
 for path in ['/v1/audit','/audit','/openai/v1/audit','/api/v1/audit']:
     app.add_api_route(path, _audit_response, methods=["GET","POST"], dependencies=[Depends(require_api_key_flexible)])
 
-async def _models_response(_: bool = Depends(require_api_key_flexible)):
+async def _models_response(request: Request):
+    """Model catalog. Public by default: agent CLIs (OpenCode/KiloCode/KimiCode)
+    poll /v1/models without a key. Only non-secret metadata is exposed.
+    Set MODELS_PUBLIC=0 to require the gateway key again."""
+    if not getattr(settings, 'models_public', True):
+        await require_api_key_flexible(request, request.headers.get('authorization'))
     providers, models = await catalog()
     data = [{
         "id": m["id"], "object": "model", "created": 0, "owned_by": m["owned_by"],
         "provider": m["provider"], "free": is_free_model(m), "capabilities": m.get("capabilities", []),
         "note": m.get("note", ""),
     } for m in models]
-    return {"object": "list", "providers": providers, "data": data}
+    # Provider account status stays protected even when the catalog is public.
+    public_providers = [
+        {"id": p["id"], "label": p.get("label"), "always_on": p.get("always_on")}
+        for p in providers
+    ]
+    return {"object": "list", "providers": public_providers, "data": data}
 
 for path in ["/v1/models", "/models", "/openai/v1/models", "/api/v1/models"]:
-    app.add_api_route(path, _models_response, methods=["GET","POST"], dependencies=[Depends(require_api_key_flexible)])
+    app.add_api_route(path, _models_response, methods=["GET", "POST"])
 
 async def _providers_response(_: bool = Depends(require_api_key_flexible)):
     providers, _ = await catalog()
@@ -555,7 +591,20 @@ async def _chat(request: Request, _: bool = Depends(require_api_key_flexible)):
         _apply_cache_headers(data, hit=False, key=key)
         if key and isinstance(data, dict) and data.get("choices"):
             response_cache.set(key, data, int(getattr(settings, 'cache_ttl_seconds', 300)))
-        return JSONResponse(data)
+        headers = {}
+        if getattr(settings, 'gateway_timing_headers', True) and isinstance(data, dict):
+            gw = data.get("gateway") or {}
+            attempts = gw.get("attempts") or []
+            last_ms = attempts[-1].get("ms") if attempts else None
+            if gw.get("selected"):
+                headers["X-Gateway-Model"] = str(gw["selected"])[:120]
+            if data.get("provider"):
+                headers["X-Gateway-Provider"] = str(data["provider"])[:60]
+            if last_ms is not None:
+                headers["X-Gateway-Latency-Ms"] = str(last_ms)
+            headers["X-Gateway-Attempts"] = str(len(attempts))
+            headers["X-Gateway-Fallback"] = "1" if gw.get("fallback_used") else "0"
+        return JSONResponse(data, headers=headers)
     except ProviderError as e:
         detail = {"message": str(e), "type": "provider_error", "provider": e.provider, "model": optimized.get("model"), "code": e.status}
         atts = getattr(e, 'attempts', None)

@@ -255,6 +255,14 @@ async def resolve_model(model_id: str) -> tuple[Any, ModelInfo]:
     raise ProviderError(f"Modelo desconocido '{model_id}'. Usa GET /v1/models o pasa proveedor/modelo directo.", status=400, provider="gateway")
 
 
+_LOCAL_PROVIDERS = ("local-ollama", "local-llamacpp", "ncm", "ncm-instruct", "ncm-lm1b")
+
+
+def _is_local_provider(pid: str) -> bool:
+    """Local providers have no upstream quota: cooldowns/breakers must not block them."""
+    return str(pid or "") in _LOCAL_PROVIDERS
+
+
 def _is_free_model(model: ModelInfo | dict[str, Any]) -> bool:
     d = model.__dict__ if isinstance(model, ModelInfo) else (model if isinstance(model, dict) else {})
     mid = str(d.get('id') or '').lower()
@@ -451,7 +459,10 @@ def _build_auto_plan(*, exclude: set[str], max_items: int,
     scored = []
     skip = skip_providers or set()
     for idx, (pid, upstream, label) in enumerate(AUTO_CANDIDATES):
-        if pid in skip or _breaker_open(pid):
+        if pid in skip:
+            continue
+        # Local providers have no quota: never skip them because a remote breaker is open.
+        if _breaker_open(pid) and not _is_local_provider(pid):
             continue
         if allowed_providers is not None and pid not in allowed_providers:
             continue
@@ -465,11 +476,13 @@ def _build_auto_plan(*, exclude: set[str], max_items: int,
         if getattr(settings, 'free_only', True) and getattr(settings, 'block_unknown_paid', True) and not _is_free_model(m):
             continue
         left = _cooldown_left(mid)
-        # keep pollinations eligible through short transient cooldowns; skip long/hard cooldowns
-        if left > 45:
-            continue
-        if left > 10 and pid != 'pollinations':
-            continue
+        # Local providers have no quota/rate limit; ignore their cooldown so they stay reachable.
+        if not _is_local_provider(pid):
+            # keep pollinations eligible through short transient cooldowns; skip long/hard cooldowns
+            if left > 45:
+                continue
+            if left > 10 and pid != 'pollinations':
+                continue
         st = _stat(pid)
         ema = st.get('ema_ms') or 5000
         fail_penalty = min(st['fail'], 20) * 2.0
@@ -548,7 +561,7 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
         if provider.id in skipped_providers:
             return None
         breaker_left = _breaker_left(provider.id)
-        if breaker_left > 0:
+        if breaker_left > 0 and not _is_local_provider(provider.id):
             skipped_providers.add(provider.id)
             attempts.append({
                 "provider": provider.id, "model": model.id, "ok": False, "ms": 0,
@@ -709,7 +722,7 @@ async def execute_with_fallback(payload: dict[str, Any]) -> tuple[dict[str, Any]
         if model.id in tried:
             continue
         tried.add(model.id)
-        if _cooldown_left(model.id) > 0:
+        if _cooldown_left(model.id) > 0 and not _is_local_provider(provider.id):
             # Never sleep inside a request; another route or a clear Retry-After is better.
             continue
         data = await try_one(provider, model)
@@ -786,10 +799,12 @@ async def stream_with_fallback(payload: dict[str, Any]) -> AsyncIterator[bytes]:
     for p, m in candidates[:10]:
         if calls >= max_attempts:
             break
-        if p.id in skipped_providers or _breaker_open(p.id):
+        if p.id in skipped_providers:
+            continue
+        if _breaker_open(p.id) and not _is_local_provider(p.id):
             skipped_providers.add(p.id)
             continue
-        if _cooldown_left(m.id) > 0:
+        if _cooldown_left(m.id) > 0 and not _is_local_provider(p.id):
             # Do not sleep on a cooling model; try another route immediately.
             continue
         calls += 1
@@ -828,6 +843,47 @@ async def stream_with_fallback(payload: dict[str, Any]) -> AsyncIterator[bytes]:
                 raise _wrap_terminal(e, [{"provider": p.id, "model": m.id, "ok": False,
                                            "error": err, "kind": kind}]) from e
             continue
+    # Last resort: if every candidate was skipped by remote cooldown/breaker, try any
+    # available LOCAL provider directly. Local inference has no upstream quota, so a
+    # client (KimiCode/OpenCode) must never receive a "0 calls" stream failure while
+    # a local model is reachable.
+    if calls == 0 and requested == "auto":
+        for lp in _instances():
+            if not _is_local_provider(lp.id) or not lp.available():
+                continue
+            if lp.id in skipped_providers:
+                continue
+            for mid, upstream in (
+                (f"{lp.id}/{getattr(settings, 'local_ollama_model', '')}", getattr(settings, 'local_ollama_model', '')),
+                (f"{lp.id}/{getattr(settings, 'local_llamacpp_model', '')}", getattr(settings, 'local_llamacpp_model', '')),
+                (f"{lp.id}/{getattr(settings, 'ncm_local_model', '')}", getattr(settings, 'ncm_local_model', '')),
+            ):
+                if lp.id in ("local-ollama", "local-llamacpp", "ncm", "ncm-instruct") and upstream:
+                    break
+            if not upstream:
+                continue
+            m = ModelInfo(id=mid, provider=lp.id, owned_by=lp.id, upstream_model=upstream,
+                          capabilities=["chat", "tools"], note="Local last-resort stream fallback", free=True)
+            calls += 1
+            t0 = time.time()
+            yielded = False
+            try:
+                async for chunk in lp.stream_chat(payload, m):
+                    yielded = True
+                    yield chunk
+                _record(lp.id, ok=True, ms=int((time.time() - t0) * 1000))
+                _breaker_success(lp.id)
+                return
+            except Exception as e:
+                errors.append(f"{m.id} [local-fallback]: {str(e)[:180]}")
+                _log.warning("local last-resort stream %s failed: %s", m.id, str(e)[:140])
+                if yielded:
+                    raise ProviderError(
+                        f"Stream interrupted after partial output from {m.id}; not retrying: {str(e)[:180]}",
+                        status=502, provider=lp.id,
+                    ) from e
+                continue
+
     now = time.time()
     soonest: float | None = None
     for until in _COOLDOWN.values():
@@ -839,10 +895,18 @@ async def stream_with_fallback(payload: dict[str, Any]) -> AsyncIterator[bytes]:
         if left > 0:
             soonest = left if soonest is None else min(soonest, left)
     hint = f" Reintenta en ~{soonest:.0f}s." if soonest else ""
+    # If no call was even attempted because everything is cooling down, this is a
+    # rate-limit condition, not a gateway failure: use 429 + Retry-After so agent
+    # clients back off cleanly instead of cancelling compaction.
+    status = 429 if (calls == 0 and soonest) else 502
+    reason = (
+        f"Todas las rutas están en cooldown/breaker ({soonest:.0f}s) y ningún modelo local "
+        f"pudo responder. Activa LOCAL_OLLAMA_ENABLED=1 o espera."
+        if calls == 0 else f"Streaming fallback agotado tras {calls} llamada(s)."
+    )
     err = ProviderError(
-        f"Streaming fallback agotado tras {calls} llamada(s); no se bloquea más. "
-        + " | ".join(errors[-4:]) + hint,
-        status=502, provider="gateway",
+        f"{reason} " + " | ".join(errors[-4:]) + hint,
+        status=status, provider="gateway",
     )
     if soonest:
         err.retry_after = soonest  # type: ignore[attr-defined]

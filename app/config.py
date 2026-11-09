@@ -215,6 +215,27 @@ class SettingsProxy:
     def local_ollama_ctx(self) -> int:
         return max(1024, _read_int("LOCAL_OLLAMA_CTX", 8192))
 
+    @property
+    def local_ollama_keep_alive(self) -> str:
+        # Keep the local model resident. Without this Ollama unloads it and the
+        # next request pays a 20-30s reload (observed 125s TTFT in KimiCode).
+        return _read_env("LOCAL_OLLAMA_KEEP_ALIVE", "30m")
+
+    @property
+    def local_ollama_num_batch(self) -> int:
+        # Larger prompt-processing batch speeds up prefill on CPU-offloaded MoE.
+        return max(32, _read_int("LOCAL_OLLAMA_NUM_BATCH", 512))
+
+    @property
+    def models_public(self) -> bool:
+        # Model catalog is non-secret metadata; agent CLIs (OpenCode/KiloCode)
+        # poll /v1/models without a key. Public by default, disable if needed.
+        return _read_bool("MODELS_PUBLIC", True)
+
+    @property
+    def gateway_timing_headers(self) -> bool:
+        return _read_bool("GATEWAY_TIMING_HEADERS", True)
+
     # Optional llama-cpp-python local backend (OpenAI-compatible server).
     # It is deliberately separate from Ollama: Ollama remains the default local
     # engine; this backend is opt-in and intended for models that fit fully in
@@ -430,6 +451,11 @@ class SettingsProxy:
     @property
     def model_params_json(self) -> str:
         return _read_env("MODEL_PARAMS_JSON", "{}")
+
+    # Diagnostic access logging (never logs keys; identifies failing clients)
+    @property
+    def access_log(self) -> bool:
+        return _read_bool("GATEWAY_ACCESS_LOG", True)
 
     # OpenTelemetry configuration
     @property
