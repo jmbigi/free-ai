@@ -135,7 +135,7 @@ class MCPServer:
 | **Context extension** (sliding window >128) | Sliding window + summary compression | `app/ncm/thinker_lite.py`, `ncm_server.py` |
 | **Thinkerspecialization** | Sub-classes: `MathThinker`, `CodeThinker`, `FactThinker` | `app/ncm/thinker_lite.py` |
 | **Batch inference API** | `POST /v1/ncm/batch` con `n=1..4` | `ncm_server.py`, `router.py` |
-| **Quantization INT4/INT8** | `bitsandbytes` / `ggml` quantization para 725M | `local/ncm/.../quantize.py` |
+| **Quantization INT4/INT8** | `ncm_to_gguf.py` + `ncm_quantize.py` (GGUF pipeline) | `deploy/ncm_to_gguf.py`, `deploy/ncm_quantize.py` | ✅ Hecho |
 
 ### 3.6 Parámetros y Configuración
 
@@ -163,23 +163,22 @@ class SettingsProxy:
     MCP_TOOLS_ROOT: str = "/tmp/mcp-tools"
 ```
 
-### 3.7 Cuantificación (Quantization)
+### 3.7 Cuantificación (Modelos Compatibles GGUF)
 
-| Modelo | Actual | Target | Herramienta |
-|---|---|---|---|
-| qwen3-coder-opt 30.5B | Q4_K_M (18 GB) | **Q3_K_M (14 GB)**, Q2_K (11 GB) | `llama-quantize`, `llama.cpp` |
-| NCM-Instruct 725M | FP16 (3.4 GB VRAM) | **INT4 (1.1 GB)**, INT8 (2.0 GB) | `bitsandbytes`, `ggml` |
-| NCM LM1B 725M | FP16 | **INT4/INT8** | Same |
-| Nemotron (cloud) | N/A | N/A | N/A |
+| Modelo | Actual | Target | Herramienta | Estado |
+|---|---|---|---|---|
+| qwen3-coder-opt 30.5B | Q4_K_M (18 GB) | **Q3_K_M (14 GB)**, Q2_K (11 GB) | `llama-quantize`, `llama.cpp` | Pendiente |
+| **NCM-Instruct 725M** | **F16 (1.5 GB GGUF)** | **Q4_K_M (~900 MB)** | `ncm_to_gguf.py` + `ncm_quantize.py` | **✅ Hecho** |
+| NCM LM1B 725M | FP16 | **INT4/INT8** | `ncm_quantize.py` | Pendiente |
+| Nemotron (cloud) | N/A | N/A | N/A | N/A |
 
-**Pipeline automatizado:**
+**Pipeline automatizado (NCM → GGUF → Quantización):**
 ```bash
-# deploy/quantize-models.sh
-#!/bin/bash
-set -euo pipefail
-MODEL=$1
-TARGET_Q=$2  # q3_k_m, q2_k, int4, int8
-./llama-quantize $MODEL $MODEL.$TARGET_Q.gguf $TARGET_Q
+# 1. Convertir NCM PyTorch → GGUF (F16)
+./deploy/ncm_to_gguf.py /home/kubuntu/ncm/instruct/hf-WB-catboy-NCM-Instruct-725M /home/kubuntu/models/ncm-instruct-725m.gguf
+
+# 2. Cuantizar GGUF → Q4_K_M
+./deploy/ncm_quantize.py /home/kubuntu/models/ncm-instruct-725m.gguf /home/kubuntu/models/ncm-instruct-725m-Q4_K_M.gguf --quant Q4_K_M
 ```
 
 ### 3.8 Python / Code Quality
@@ -199,28 +198,29 @@ TARGET_Q=$2  # q3_k_m, q2_k, int4, int8
 ## 4. Roadmap de Implementación
 
 ### Sprint 1 (Semana 1-2): API & Tools Core
-- [ ] Unified model registry + capabilities
-- [ ] MCP server básico (tools: web_search, file_ops)
-- [ ] Parameter validation Pydantic v2
+- [x] Unified model registry + capabilities
+- [x] MCP server básico (tools: web_search, file_ops, code_exec, bash_exec, file_read, file_write, file_list, kb_query)
+- [x] Parameter validation Pydantic v2
 - [ ] OpenAPI spec auto-generated
 
 ### Sprint 2 (Semana 3-4): NCM & Local Models
-- [ ] NCM-Instruct INT4 quantization
-- [ ] Thinker-lite specialization (Math/Code/Fact)
+- [x] NCM-Instruct GGUF conversion pipeline (ncm_to_gguf.py, ncm_quantize.py)
+- [x] Thinker-lite specialization (Math/Code/Fact)
+- [x] Sliding window context (SlidingWindowContext for 128-token NCM limit)
+- [ ] NCM-Instruct INT4 quantization (via ncm_quantize.py --quant IQ4_XS)
 - [ ] Batch inference API
-- [ ] Sliding window context (soft >128)
 
 ### Sprint 3 (Semana 5-6): Cloud & Observability
-- [ ] OpenRouter model discovery cache
-- [ ] Nemotron reasoning parameters
-- [ ] Cost tracking per request
+- [x] OpenRouter model discovery cache (TTL 1h, configurable via OPENROUTER_CACHE_TTL)
+- [x] Nemotron reasoning parameters (reasoning_effort, reasoning_tokens, reasoning_budget)
+- [x] Cost tracking per request (tokens × $/M, configurable via COST_PER_MILLION_JSON)
 - [ ] OpenTelemetry + Prometheus metrics
 
 ### Sprint 4 (Semana 7-8): MCP & Integration
-- [ ] MCP server completo (stdio + SSE)
-- [ ] KimiCode/OpenCode MCP transport
-- [ ] Sandbox code execution tool
-- [ ] Documentation + examples
+- [x] MCP server completo (stdio + SSE + WebSocket)
+- [x] KimiCode/OpenCode MCP transport
+- [x] Sandbox code execution tool (SandboxExecutor with CPU/mem/timeout limits, import blocking)
+- [x] Documentation + examples (docs/integrations/kilocode.md)
 
 ---
 
